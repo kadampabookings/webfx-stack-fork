@@ -59,6 +59,8 @@ public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQu
     @Override
     protected Future<Object> closeStream(QueryPushArgument argument) {
         StreamInfo streamInfo = getStreamInfo(argument);
+        if (streamInfo == null)
+            return Future.succeededFuture();
         streamInfo.close = argument.getClose();
         return Future.succeededFuture(streamInfo.queryStreamId);
     }
