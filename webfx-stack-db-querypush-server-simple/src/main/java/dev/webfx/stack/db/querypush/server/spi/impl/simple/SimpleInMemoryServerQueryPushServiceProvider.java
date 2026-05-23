@@ -62,6 +62,19 @@ public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQu
         if (streamInfo == null)
             return Future.succeededFuture();
         streamInfo.close = argument.getClose();
+        // Actually drop the stream + its QueryInfo when no other streams remain. Previously
+        // closeStream only flipped the `close` flag, leaving the StreamInfo registered and
+        // — because isActive() doesn't consult `close` — keeping the QueryInfo (with its
+        // cached lastQueryResult) alive indefinitely. Subsequent subscribes for the same
+        // QueryArgument then reused that stale cache via refreshQuery's
+        // "lastQueryResult != null && !isDirty()" shortcut, even though the underlying data
+        // had moved on. Symptom: "0 viewers on refresh" for past sessions, only fixed by a
+        // full server restart (which wiped the queryInfos map). Removing the stream here
+        // is what the codepath always meant — closeStream is the client's explicit
+        // teardown signal — and lets removeStreamFromQueryInfo cascade-evict the QueryInfo
+        // once no streams remain.
+        if (Boolean.TRUE.equals(streamInfo.close))
+            removeStream(streamInfo);
         return Future.succeededFuture(streamInfo.queryStreamId);
     }
 
