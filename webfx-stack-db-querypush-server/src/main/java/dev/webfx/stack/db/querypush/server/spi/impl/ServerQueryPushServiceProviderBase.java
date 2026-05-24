@@ -96,10 +96,16 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
         Future<Void> refreshQuery(QueryInfo queryInfo) {
             Future<QueryResult> resultFuture;
-            // Immediately reusing the last result if present and the query is not marked as dirty
-            if (queryInfo.lastQueryResult != null && !queryInfo.isDirty())
+            // Reuse the cached lastQueryResult when:
+            //   - the query is clean (no submits since last execute), OR
+            //   - the query is dirty BUT we're still inside the throttle
+            //     window — this is the reactivated-newcomer path; we push
+            //     the cached result to them rather than re-executing SQL
+            //     for every burst submit.
+            if (queryInfo.lastQueryResult != null
+                    && (!queryInfo.isDirty() || queryInfo.isWithinExecuteThrottle())) {
                 resultFuture = Future.succeededFuture(queryInfo.lastQueryResult);
-            else { // Otherwise asking the query service to execute the query
+            } else { // Otherwise asking the query service to execute the query
                 executedQueries++;
                 queryInfo.touchExecuted();
                 resultFuture = QueryService.executeQuery(queryInfo.queryArgument)
@@ -225,6 +231,22 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         return System.currentTimeMillis();
     }
 
+    /**
+     * Minimum interval between SQL re-executions of the same QueryInfo when
+     * it has been dirtied by a submit. Caps the worst-case execution rate
+     * regardless of how many submits arrive — without this, a high-frequency
+     * data source (e.g. 800 livestream viewers heartbeating once a minute →
+     * ~13 MediaConsumption UPDATEs per second) would force back-to-back
+     * re-executions of every push query whose data scope intersects
+     * MediaConsumption, even though the result barely changes between
+     * consecutive submits.
+     *
+     * Doesn't affect new subscribers: a stream that was just added is
+     * `reactivated` and bypasses the throttle so the cached last result is
+     * pushed to it immediately.
+     */
+    private static final long MIN_REFRESH_INTERVAL_MS = 1_000;
+
     public static final class QueryInfo {
         private final QueryArgument queryArgument;
         private final List<StreamInfo> streamInfos = new ArrayList<>(); // Contains new client streams that haven't received any result yet
@@ -267,7 +289,25 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         }
 
         public boolean needsRefresh() {
-            return reactivated || isDirty() && activeStreamCount > 0;
+            // `reactivated` (new stream just added) bypasses the throttle so
+            // the cached lastQueryResult gets pushed to the newcomer at once.
+            // For dirty-due-to-submits, hold off if we re-executed within the
+            // throttle window — the next submit (or pulse) will pick it up
+            // after the window expires.
+            if (reactivated && activeStreamCount > 0)
+                return true;
+            return isDirty() && activeStreamCount > 0 && !isWithinExecuteThrottle();
+        }
+
+        /**
+         * True when the SQL was re-executed less than {@link #MIN_REFRESH_INTERVAL_MS}
+         * ago. The cached `lastQueryResult` is treated as authoritative during
+         * that window — submits still mark the query dirty but the actual
+         * re-execution is deferred until the window expires.
+         */
+        boolean isWithinExecuteThrottle() {
+            return lastQueryExecutionTime > 0
+                && (now() - lastQueryExecutionTime) < MIN_REFRESH_INTERVAL_MS;
         }
 
         public boolean isDirty() {
