@@ -163,11 +163,23 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
         void pushResultToClient(StreamInfo streamInfo, QueryResult queryResult, QueryResultDiff queryResultDiff) {
             streamInfo.lastQueryResult = queryResult;
-            // Strip column names if the client indicated it already has them cached (sendMetadata=false)
+            // Strip SQL column names if the client indicated it has them cached (sendMetadata=false),
+            // but keep entityMapping on the wire. Reason: the React client has no DQL runtime so the
+            // wire entityMapping is the only source it has for DQL field paths (e.g. aggregate alias
+            // `n` for the live-viewers query). Relying on the client-side metadata cache here is racy
+            // — empty cache on cold subscribe (reconnects, fresh tabs) caused subscriptions to decode
+            // rows with positional `col0`/`col1` keys for their whole lifetime, producing the
+            // "0 viewers on refresh" bug. The mapping is small (tens to a few hundred bytes) compared
+            // to the row payload, so always sending it is the cheap, correct fix.
             QueryArgument qa = streamInfo.queryInfo.getQueryArgument();
-            QueryResult wireResult = (qa != null && !qa.isSendMetadata() && queryResult != null)
-                ? new QueryResult(queryResult.getRowCount(), queryResult.getColumnCount(), queryResult.getValues(), null)
-                : queryResult;
+            QueryResult wireResult;
+            if (qa != null && !qa.isSendMetadata() && queryResult != null) {
+                wireResult = new QueryResult(queryResult.getRowCount(), queryResult.getColumnCount(), queryResult.getValues(), null);
+                wireResult.setEntityMapping(queryResult.getEntityMapping());
+                wireResult.setVersionNumber(queryResult.getVersionNumber());
+            } else {
+                wireResult = queryResult;
+            }
             Object queryStreamId = streamInfo.queryStreamId;
             Console.log("pushResultToClient() to queryStreamId=" + queryStreamId + " with " + (queryResult != null ? queryResult.getRowCount() + " rows" : "diff"));
             QueryPushServerService.pushQueryResultToClient(new QueryPushResult(queryStreamId, wireResult, queryResultDiff), streamInfo.clientRunId)
