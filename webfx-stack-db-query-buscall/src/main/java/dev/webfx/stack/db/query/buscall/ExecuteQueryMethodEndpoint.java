@@ -22,6 +22,7 @@ public final class ExecuteQueryMethodEndpoint extends AsyncFunctionBusCallEndpoi
             QueryResult stripped = new QueryResult(result.getRowCount(), result.getColumnCount(), result.getValues(), null);
             stripped.setVersionNumber(result.getVersionNumber());
             // entityMapping intentionally NOT copied — client has it cached
+            stripped.setCallSeq(result.getCallSeq());
             return stripped;
         }
         return result;

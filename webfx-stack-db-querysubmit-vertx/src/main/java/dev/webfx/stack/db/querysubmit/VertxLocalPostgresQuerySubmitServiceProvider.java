@@ -16,6 +16,7 @@ import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.db.submit.SubmitResult;
 import dev.webfx.stack.db.submit.listener.SubmitListenerService;
 import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
+import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.sqlclient.*;
@@ -81,7 +82,20 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<QueryResult> executeQuery(QueryArgument argument) {
-        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), argument.getSourceId(), this::executeQueryNow);
+        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), coalescingKey(argument, ThreadLocalStateHolder.getRunId()), this::executeQueryNow);
+    }
+
+    /**
+     * Build the AsyncQueue coalescing key from the caller's callId and the client's runId.
+     * Returns {@code null} when either is missing — bare callIds could collide across clients
+     * on the shared server-side queue, so unknown clients get no coalescing rather than wrong
+     * coalescing.
+     */
+    private static Object coalescingKey(QueryArgument argument, Object runId) {
+        int callId = argument.getCallId();
+        if (callId == 0 || runId == null)
+            return null;
+        return runId + ":" + callId;
     }
 
     private Future<QueryResult> executeQueryNow(QueryArgument argument) {
@@ -98,13 +112,13 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<Batch<QueryResult>> executeQueryBatch(Batch<QueryArgument> batch) {
-        // Use the first argument's priority/sourceId as the batch metadata. By convention all
+        // Use the first argument's priority/callId as the batch metadata. By convention all
         // QueryArguments inside a batch originate from the same caller so they share the same
         // priority and source.
         QueryArgument[] arr = batch.getArray();
         int priority = arr.length > 0 ? arr[0].getPriority() : QueryArgument.STANDARD_PRIORITY;
-        Object sourceId = arr.length > 0 ? arr[0].getSourceId() : null;
-        return asyncQueue.addAsyncOperation(batch, priority, sourceId, this::executeQueryBatchNow);
+        Object key = arr.length > 0 ? coalescingKey(arr[0], ThreadLocalStateHolder.getRunId()) : null;
+        return asyncQueue.addAsyncOperation(batch, priority, key, this::executeQueryBatchNow);
     }
 
     private Future<Batch<QueryResult>> executeQueryBatchNow(Batch<QueryArgument> batch) {
@@ -126,7 +140,13 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         return connection
             .preparedQuery(argument.getStatement())
             .execute(tupleFromArguments(argument.getParameters()))
-            .map(VertxSqlUtil::toWebFxQueryResult);
+            .map(rs -> {
+                QueryResult result = VertxSqlUtil.toWebFxQueryResult(rs);
+                // Echo the caller's fire sequence so the client can discard stale results when
+                // multiple fires from the same source race on the network.
+                result.setCallSeq(argument.getCallSeq());
+                return result;
+            });
     }
 
     @Override

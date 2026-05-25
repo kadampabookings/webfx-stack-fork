@@ -17,7 +17,8 @@ public final class QueryArgumentBuilder {
     private boolean sendMetadata;
     private boolean hasDqlRuntime = true;
     private int priority = QueryArgument.STANDARD_PRIORITY;
-    private Object sourceId;
+    private int callId;
+    private int callSeq;
 
     public QueryArgumentBuilder setOriginalArgument(QueryArgument originalArgument) {
         this.originalArgument = originalArgument;
@@ -73,8 +74,13 @@ public final class QueryArgumentBuilder {
         return this;
     }
 
-    public QueryArgumentBuilder setSourceId(Object sourceId) {
-        this.sourceId = sourceId;
+    public QueryArgumentBuilder setCallId(int callId) {
+        this.callId = callId;
+        return this;
+    }
+
+    public QueryArgumentBuilder setCallSeq(int callSeq) {
+        this.callSeq = callSeq;
         return this;
     }
 
@@ -89,11 +95,12 @@ public final class QueryArgumentBuilder {
             .setSendMetadata(argument.isSendMetadata())
             .setHasDqlRuntime(argument.isHasDqlRuntime())
             .setPriority(argument.getPriority())
-            .setSourceId(argument.getSourceId())
+            .setCallId(argument.getCallId())
+            .setCallSeq(argument.getCallSeq())
             ;
     }
 
     public QueryArgument build() {
-        return new QueryArgument(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, priority, sourceId);
+        return new QueryArgument(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, priority, callId, callSeq);
     }
 }

@@ -18,7 +18,8 @@ public final class QueryArgumentSerialCodec extends SerialCodecBase<QueryArgumen
     private static final String SEND_METADATA_KEY = "sendMetadata";
     private static final String HAS_DQL_RUNTIME_KEY = "hasDqlRuntime";
     private static final String PRIORITY_KEY = "priority";
-    private static final String SOURCE_ID_KEY = "sourceId";
+    private static final String CALL_ID_KEY = "callId";
+    private static final String CALL_SEQ_KEY = "callSeq";
 
     public QueryArgumentSerialCodec() {
         super(QueryArgument.class, CODEC_ID);
@@ -39,15 +40,14 @@ public final class QueryArgumentSerialCodec extends SerialCodecBase<QueryArgumen
         if (!arg.isHasDqlRuntime())
             encodeBoolean(serial, HAS_DQL_RUNTIME_KEY, false);
         encodeInteger(serial, PRIORITY_KEY, arg.getPriority(), QueryArgument.STANDARD_PRIORITY);
-        if (arg.getSourceId() != null)
-            encodeObject(serial, SOURCE_ID_KEY, arg.getSourceId());
+        encodeInteger(serial, CALL_ID_KEY, arg.getCallId(), 0);
+        encodeInteger(serial, CALL_SEQ_KEY, arg.getCallSeq(), 0);
     }
 
     @Override
     public QueryArgument decode(ReadOnlyAstObject serial) {
         Boolean sendMetadata = decodeBoolean(serial, SEND_METADATA_KEY);
         Boolean hasDqlRuntime = decodeBoolean(serial, HAS_DQL_RUNTIME_KEY);
-        Integer priority = decodeInteger(serial, PRIORITY_KEY);
         return new QueryArgument(null,
             decodeObject(serial,      DATA_SOURCE_ID_KEY),
             decodeObject(serial,      DATA_SCOPE_KEY),
@@ -57,8 +57,9 @@ public final class QueryArgumentSerialCodec extends SerialCodecBase<QueryArgumen
             decodeStringArray(serial, PARAMETER_NAMES_KEY),
             sendMetadata == null || sendMetadata, // default to true when absent
             hasDqlRuntime == null || hasDqlRuntime, // default to true when absent
-            priority == null ? QueryArgument.STANDARD_PRIORITY : priority,
-            decodeObject(serial, SOURCE_ID_KEY)
+            decodeInteger(serial, PRIORITY_KEY, QueryArgument.STANDARD_PRIORITY),
+            decodeInteger(serial, CALL_ID_KEY, 0),
+            decodeInteger(serial, CALL_SEQ_KEY, 0)
         );
     }
 }

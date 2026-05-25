@@ -15,6 +15,7 @@ public final class QueryResultSerialCodec extends SerialCodecBase<QueryResult> {
     private final static String COMPRESSED_VALUES_KEY = "cvalues";
     private final static String VERSION_KEY = "version";
     private final static String ENTITY_MAPPING_KEY = "entityMapping";
+    private final static String CALL_SEQ_KEY = "callSeq";
 
     public QueryResultSerialCodec() {
         super(QueryResult.class, CODEC_ID);
@@ -32,6 +33,7 @@ public final class QueryResultSerialCodec extends SerialCodecBase<QueryResult> {
             encodeObjectArray(serial, VALUES_KEY, rs.getValues());
         encodeInteger(serial, VERSION_KEY, rs.getVersionNumber());
         encodeObject(serial, ENTITY_MAPPING_KEY, rs.getEntityMapping());
+        encodeInteger(serial, CALL_SEQ_KEY, rs.getCallSeq(), 0);
     }
 
     @Override
@@ -47,6 +49,7 @@ public final class QueryResultSerialCodec extends SerialCodecBase<QueryResult> {
                 decodeStringArray(serial, COLUMN_NAMES_KEY));
         rs.setVersionNumber(decodeInteger(serial, VERSION_KEY, 0));
         rs.setEntityMapping(decodeObject(serial, ENTITY_MAPPING_KEY));
+        rs.setCallSeq(decodeInteger(serial, CALL_SEQ_KEY, 0));
         return rs;
     }
 }

@@ -23,21 +23,22 @@ public final class QueryArgument {
     private final boolean sendMetadata; // when false, the server omits columnNames from the QueryResult (client has them cached)
     private final boolean hasDqlRuntime; // when false, the server compiles DQL expression fields to SQL instead of sending terminals for client-side evaluation
     private final int priority; // execution priority for the server-side AsyncQueue; higher value = sooner; STANDARD_PRIORITY (0) is the default
-    private final Object sourceId; // opaque caller-supplied identifier; when set, a new pending query with the same sourceId supersedes (cancels) any prior pending one
+    private final int callId; // caller identity (one per ReactiveQueryCall instance); the server combines it with the client's runId to derive a stable coalescing key. 0 means unset (no coalescing).
+    private final int callSeq; // per-fire sequence number; the server echoes it in the QueryResult so the caller can filter out stale results. 0 means unset.
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, false, true, STANDARD_PRIORITY, null);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, false, true, STANDARD_PRIORITY, 0, 0);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, true, STANDARD_PRIORITY, null);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, true, STANDARD_PRIORITY, 0, 0);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, STANDARD_PRIORITY, null);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, STANDARD_PRIORITY, 0, 0);
     }
 
-    public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime, int priority, Object sourceId) {
+    public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime, int priority, int callId, int callSeq) {
         this.originalArgument = originalArgument;
         this.dataSourceId = dataSourceId;
         this.dataScope = dataScope;
@@ -48,7 +49,8 @@ public final class QueryArgument {
         this.sendMetadata = sendMetadata;
         this.hasDqlRuntime = hasDqlRuntime;
         this.priority = priority;
-        this.sourceId = sourceId;
+        this.callId = callId;
+        this.callSeq = callSeq;
     }
 
     public QueryArgument getOriginalArgument() {
@@ -95,13 +97,20 @@ public final class QueryArgument {
     }
 
     /**
-     * Opaque caller-supplied identifier. When non-null and a new query with the same {@code sourceId}
-     * arrives while a previous one is still pending, the previous pending query is cancelled and its
-     * future is failed — used for "user is typing in a search box" patterns where the latest input
-     * invalidates earlier in-flight queries.
+     * Caller identity, stable per source (typically per {@code ReactiveQueryCall} instance). The server combines this
+     * with the client's runId to derive the AsyncQueue coalescing key — so a new query from the same caller supersedes
+     * any earlier pending one. Returns 0 when unset; servers should treat 0 as "no coalescing".
      */
-    public Object getSourceId() {
-        return sourceId;
+    public int getCallId() {
+        return callId;
+    }
+
+    /**
+     * Per-fire sequence number. The server echoes it verbatim into the {@link QueryResult} so the caller can detect
+     * stale results (i.e. a result that arrives after a newer fire has already returned). Returns 0 when unset.
+     */
+    public int getCallSeq() {
+        return callSeq;
     }
 
     @Override
