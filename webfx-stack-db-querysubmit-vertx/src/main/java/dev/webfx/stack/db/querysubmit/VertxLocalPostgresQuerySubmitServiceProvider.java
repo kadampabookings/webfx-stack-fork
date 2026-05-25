@@ -81,7 +81,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<QueryResult> executeQuery(QueryArgument argument) {
-        return asyncQueue.addAsyncOperation(argument, this::executeQueryNow);
+        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), argument.getSourceId(), this::executeQueryNow);
     }
 
     private Future<QueryResult> executeQueryNow(QueryArgument argument) {
@@ -98,7 +98,13 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<Batch<QueryResult>> executeQueryBatch(Batch<QueryArgument> batch) {
-        return asyncQueue.addAsyncOperation(batch, this::executeQueryBatchNow);
+        // Use the first argument's priority/sourceId as the batch metadata. By convention all
+        // QueryArguments inside a batch originate from the same caller so they share the same
+        // priority and source.
+        QueryArgument[] arr = batch.getArray();
+        int priority = arr.length > 0 ? arr[0].getPriority() : QueryArgument.STANDARD_PRIORITY;
+        Object sourceId = arr.length > 0 ? arr[0].getSourceId() : null;
+        return asyncQueue.addAsyncOperation(batch, priority, sourceId, this::executeQueryBatchNow);
     }
 
     private Future<Batch<QueryResult>> executeQueryBatchNow(Batch<QueryArgument> batch) {
@@ -125,7 +131,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<SubmitResult> executeSubmit(SubmitArgument argument) {
-        return asyncQueue.addAsyncOperation(argument, this::executeSubmitNow);
+        // Submits get priority but no source-based coalescing (sourceId=null): cancelling a pending
+        // submit because a newer same-source one arrived would drop side-effecting work.
+        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), null, this::executeSubmitNow);
     }
 
     private Future<SubmitResult> executeSubmitNow(SubmitArgument argument) {
@@ -135,7 +143,11 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<Batch<SubmitResult>> executeSubmitBatch(Batch<SubmitArgument> batch) {
-        return asyncQueue.addAsyncOperation(batch, this::executeSubmitBatchNow);
+        // Same convention as executeQueryBatch: use the first arg's priority. No source coalescing
+        // on submits — see executeSubmit() for the rationale.
+        SubmitArgument[] arr = batch.getArray();
+        int priority = arr.length > 0 ? arr[0].getPriority() : SubmitArgument.STANDARD_PRIORITY;
+        return asyncQueue.addAsyncOperation(batch, priority, null, this::executeSubmitBatchNow);
     }
 
     private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch) {

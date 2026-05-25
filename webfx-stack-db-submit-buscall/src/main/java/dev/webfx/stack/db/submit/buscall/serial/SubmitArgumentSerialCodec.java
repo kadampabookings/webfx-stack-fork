@@ -15,6 +15,7 @@ public final class SubmitArgumentSerialCodec extends SerialCodecBase<SubmitArgum
     private static final String LANGUAGE_KEY = "lang";
     private static final String STATEMENT_KEY = "statement";
     private static final String PARAMETERS_KEY = "parameters";
+    private static final String PRIORITY_KEY = "priority";
 
     public SubmitArgumentSerialCodec() {
         super(SubmitArgument.class, CODEC_ID);
@@ -29,17 +30,20 @@ public final class SubmitArgumentSerialCodec extends SerialCodecBase<SubmitArgum
         encodeString(        serial, STATEMENT_KEY,             arg.getStatement());
         if (!Arrays.isEmpty(arg.getParameters()))
             encodeObjectArray(serial, PARAMETERS_KEY,           arg.getParameters());
+        encodeInteger(serial, PRIORITY_KEY, arg.getPriority(), SubmitArgument.STANDARD_PRIORITY);
     }
 
     @Override
     public SubmitArgument decode(ReadOnlyAstObject serial) {
+        Integer priority = decodeInteger(serial, PRIORITY_KEY);
         return new SubmitArgument(null,
                 decodeObject(     serial, DATA_SOURCE_ID_KEY),
                 decodeObject(     serial, DATA_SCOPE_KEY),
                 decodeBoolean(    serial, RETURN_GENERATED_KEYS_KEY),
                 decodeString(     serial, LANGUAGE_KEY),
                 decodeString(     serial, STATEMENT_KEY),
-                decodeObjectArray(serial, PARAMETERS_KEY)
+                decodeObjectArray(serial, PARAMETERS_KEY),
+                priority == null ? SubmitArgument.STANDARD_PRIORITY : priority
         );
     }
 }

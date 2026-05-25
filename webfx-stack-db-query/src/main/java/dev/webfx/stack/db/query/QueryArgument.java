@@ -11,6 +11,8 @@ import java.util.Objects;
  */
 public final class QueryArgument {
 
+    public static final int STANDARD_PRIORITY = 0;
+
     private final transient QueryArgument originalArgument;
     private final Object dataSourceId;
     private final DataScope dataScope;
@@ -20,16 +22,22 @@ public final class QueryArgument {
     private final String[] parameterNames; // null if parameters are not named, otherwise contains each parameter name in the same order as the `parameters` array
     private final boolean sendMetadata; // when false, the server omits columnNames from the QueryResult (client has them cached)
     private final boolean hasDqlRuntime; // when false, the server compiles DQL expression fields to SQL instead of sending terminals for client-side evaluation
+    private final int priority; // execution priority for the server-side AsyncQueue; higher value = sooner; STANDARD_PRIORITY (0) is the default
+    private final Object sourceId; // opaque caller-supplied identifier; when set, a new pending query with the same sourceId supersedes (cancels) any prior pending one
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, false, true);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, false, true, STANDARD_PRIORITY, null);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, true);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, true, STANDARD_PRIORITY, null);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime) {
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, STANDARD_PRIORITY, null);
+    }
+
+    public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime, int priority, Object sourceId) {
         this.originalArgument = originalArgument;
         this.dataSourceId = dataSourceId;
         this.dataScope = dataScope;
@@ -39,6 +47,8 @@ public final class QueryArgument {
         this.parameterNames = parameterNames;
         this.sendMetadata = sendMetadata;
         this.hasDqlRuntime = hasDqlRuntime;
+        this.priority = priority;
+        this.sourceId = sourceId;
     }
 
     public QueryArgument getOriginalArgument() {
@@ -77,6 +87,21 @@ public final class QueryArgument {
     /** When false, the server compiles DQL expression fields to SQL instead of sending terminals for client-side evaluation. */
     public boolean isHasDqlRuntime() {
         return hasDqlRuntime;
+    }
+
+    /** Execution priority used by the server's query queue. Higher = sooner. Default is {@link #STANDARD_PRIORITY}. */
+    public int getPriority() {
+        return priority;
+    }
+
+    /**
+     * Opaque caller-supplied identifier. When non-null and a new query with the same {@code sourceId}
+     * arrives while a previous one is still pending, the previous pending query is cancelled and its
+     * future is failed — used for "user is typing in a search box" patterns where the latest input
+     * invalidates earlier in-flight queries.
+     */
+    public Object getSourceId() {
+        return sourceId;
     }
 
     @Override

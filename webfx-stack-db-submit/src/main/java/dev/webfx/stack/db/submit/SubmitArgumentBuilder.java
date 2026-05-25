@@ -14,6 +14,7 @@ public final class SubmitArgumentBuilder {
     private String language;
     private String statement;
     private Object[] parameters;
+    private int priority = SubmitArgument.STANDARD_PRIORITY;
 
     public SubmitArgumentBuilder setOriginalArgument(SubmitArgument originalArgument) {
         this.originalArgument = originalArgument;
@@ -54,6 +55,11 @@ public final class SubmitArgumentBuilder {
         return this;
     }
 
+    public SubmitArgumentBuilder setPriority(int priority) {
+        this.priority = priority;
+        return this;
+    }
+
     public SubmitArgumentBuilder copy(SubmitArgument argument) {
         return setOriginalArgument(argument)
                 .setDataSourceId(argument.getDataSourceId())
@@ -61,10 +67,11 @@ public final class SubmitArgumentBuilder {
                 .setReturnGeneratedKeys(argument.returnGeneratedKeys())
                 .setLanguage(argument.getLanguage())
                 .setStatement(argument.getStatement())
-                .setParameters(argument.getParameters());
+                .setParameters(argument.getParameters())
+                .setPriority(argument.getPriority());
     }
 
     public SubmitArgument build() {
-        return new SubmitArgument(originalArgument, dataSourceId, dataScope, returnGeneratedKeys, language, statement, parameters);
+        return new SubmitArgument(originalArgument, dataSourceId, dataScope, returnGeneratedKeys, language, statement, parameters, priority);
     }
 }

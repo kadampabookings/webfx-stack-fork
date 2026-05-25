@@ -8,6 +8,8 @@ import dev.webfx.stack.db.datascope.DataScope;
  */
 public final class SubmitArgument {
 
+    public static final int STANDARD_PRIORITY = 0;
+
     private final transient SubmitArgument originalArgument;
     private final Object dataSourceId;
     private final DataScope dataScope;
@@ -15,8 +17,13 @@ public final class SubmitArgument {
     private final String language;
     private final String statement;
     private final Object[] parameters;
+    private final int priority; // execution priority for the server-side AsyncQueue; higher = sooner; STANDARD_PRIORITY (0) is the default
 
     public SubmitArgument(SubmitArgument originalArgument, Object dataSourceId, DataScope dataScope, boolean returnGeneratedKeys, String language, String statement, Object[] parameters) {
+        this(originalArgument, dataSourceId, dataScope, returnGeneratedKeys, language, statement, parameters, STANDARD_PRIORITY);
+    }
+
+    public SubmitArgument(SubmitArgument originalArgument, Object dataSourceId, DataScope dataScope, boolean returnGeneratedKeys, String language, String statement, Object[] parameters, int priority) {
         this.originalArgument = originalArgument;
         this.dataSourceId = dataSourceId;
         this.dataScope = dataScope;
@@ -24,6 +31,7 @@ public final class SubmitArgument {
         this.language = language;
         this.statement = statement;
         this.parameters = parameters;
+        this.priority = priority;
     }
 
     public SubmitArgument getOriginalArgument() {
@@ -52,6 +60,11 @@ public final class SubmitArgument {
 
     public Object[] getParameters() {
         return parameters;
+    }
+
+    /** Execution priority used by the server's submit queue. Higher = sooner. Default is {@link #STANDARD_PRIORITY}. */
+    public int getPriority() {
+        return priority;
     }
 
     @Override
