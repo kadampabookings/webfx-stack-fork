@@ -10,6 +10,13 @@ public final class SubmitArgument {
 
     public static final int STANDARD_PRIORITY = 0;
 
+    /**
+     * Non-interactive background work that should yield to user-triggered submits.
+     * Use for fire-and-forget telemetry such as media-consumption recording, analytics
+     * pings, or other low-stakes writes whose latency the user never observes.
+     */
+    public static final int BACKGROUND_PRIORITY = -10;
+
     private final transient SubmitArgument originalArgument;
     private final Object dataSourceId;
     private final DataScope dataScope;
