@@ -65,8 +65,19 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
                             .build();
                         return targetProvider.executeQuery(dqlArgument)
                             .map(result -> {
-                                // Attach the entity mapping so it can be serialized to the client
-                                if (result != null && queryMapping != null && argument.isSendMetadata())
+                                // Always attach the entity mapping to the in-memory QueryResult — the wire-level
+                                // "ship it or strip it?" decision happens downstream (ExecuteQueryMethodEndpoint
+                                // for one-shot calls, ServerQueryPushServiceProviderBase for push subscriptions),
+                                // which already strip the mapping when the client claims a cache hit.
+                                //
+                                // Previously this was gated on `argument.isSendMetadata()`, which silently dropped
+                                // the mapping whenever a client subscribed with `sendMetadata=false` (warm cache).
+                                // That poisoned the server-side `queryInfo.lastQueryResult` cache: every later
+                                // subscriber to the same query inherited the missing mapping, so push streams
+                                // decoded rows as positional `col0`/`col1` for their whole lifetime — and any
+                                // restart of the client's per-statement cache (StrictMode remount, BusProvider
+                                // teardown, etc.) left the activity feed stuck empty until a server restart.
+                                if (result != null && queryMapping != null)
                                     result.setEntityMapping(queryMapping);
                                 return result;
                             });

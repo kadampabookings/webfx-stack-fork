@@ -377,22 +377,29 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
      * flag — defensive against the "cold cache lying about being warm" race that previously
      * stranded streams in positional-column-name mode for their whole lifetime. Subsequent
      * pushes omit it because the client (per-statement {@code QueryMetadataCache}) has it.
+     * <p>
+     * The `entityMappingSent` flag is only flipped once we actually emit a non-null mapping —
+     * otherwise an early push that happened to lack entityMapping (e.g. the ORM layer skipped
+     * computing it for some pre-data initial result) would mark the stream "done" without the
+     * client ever seeing the mapping, stranding all later pushes in positional-name decode.
      */
     private QueryResult trimForPush(StreamInfo streamInfo, QueryResult queryResult) {
         if (queryResult == null) return null;
         QueryArgument qa = streamInfo.queryInfo.getQueryArgument();
         boolean firstPush = !streamInfo.entityMappingSent;
         boolean clientHasColumnNamesCached = qa != null && !qa.isSendMetadata();
+        Object entityMapping = queryResult.getEntityMapping();
+        boolean hasEntityMapping = entityMapping != null;
         if (firstPush && !clientHasColumnNamesCached) {
             // Cold client subscribe — let the full result through unchanged.
-            streamInfo.entityMappingSent = true;
+            if (hasEntityMapping) streamInfo.entityMappingSent = true;
             return queryResult;
         }
         QueryResult stripped = new QueryResult(queryResult.getRowCount(), queryResult.getColumnCount(), queryResult.getValues(), null);
         stripped.setVersionNumber(queryResult.getVersionNumber());
         stripped.setCallSeq(queryResult.getCallSeq());
-        if (firstPush) {
-            stripped.setEntityMapping(queryResult.getEntityMapping());
+        if (firstPush && hasEntityMapping) {
+            stripped.setEntityMapping(entityMapping);
             streamInfo.entityMappingSent = true;
         }
         return stripped;
