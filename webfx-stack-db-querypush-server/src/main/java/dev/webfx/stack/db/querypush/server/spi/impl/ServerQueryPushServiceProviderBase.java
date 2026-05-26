@@ -108,7 +108,14 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             } else { // Otherwise asking the query service to execute the query
                 executedQueries++;
                 queryInfo.touchExecuted();
-                resultFuture = QueryService.executeQuery(queryInfo.queryArgument)
+                // Re-fires (lastQueryResult != null) drop a priority tier so a user-facing
+                // one-shot query or submit can jump ahead of a freshness refresh on the
+                // AsyncQueue. Initial fires keep the subscription's original priority so
+                // first paint competes fairly with one-shot reads. See PUSH_REFRESH_PRIORITY_DELTA.
+                QueryArgument executeArgument = queryInfo.lastQueryResult == null
+                    ? queryInfo.queryArgument
+                    : withPushRefreshPriority(queryInfo.queryArgument);
+                resultFuture = QueryService.executeQuery(executeArgument)
                     .onFailure(Console::error);
             }
             // Calling the pushResultToRelevantClients() method when the result is ready
@@ -225,6 +232,17 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
     private static long now() {
         return System.currentTimeMillis();
+    }
+
+    /**
+     * Returns a copy of the subscription's QueryArgument with priority lowered by
+     * {@link QueryArgument#PUSH_REFRESH_PRIORITY_DELTA} — applied only to push re-fires.
+     */
+    private static QueryArgument withPushRefreshPriority(QueryArgument argument) {
+        return QueryArgument.builder()
+            .copy(argument)
+            .setPriority(argument.getPriority() + QueryArgument.PUSH_REFRESH_PRIORITY_DELTA)
+            .build();
     }
 
     /**

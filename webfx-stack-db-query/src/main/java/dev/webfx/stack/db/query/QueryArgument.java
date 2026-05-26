@@ -13,6 +13,17 @@ public final class QueryArgument {
 
     public static final int STANDARD_PRIORITY = 0;
 
+    /**
+     * Priority delta the push server applies to <strong>re-fires</strong> of an existing subscription
+     * (i.e. when an already-pushed query re-executes because a relevant submit invalidated its result).
+     * The <em>initial</em> fire keeps the subscription's chosen priority — first paint competes fairly
+     * with one-shot queries — but subsequent refreshes drop a tier so they yield to user-facing work
+     * (one-shot reads, submits) when the server's AsyncQueue is contended. A push refresh's freshness
+     * is user-visible (so it shouldn't sink all the way to {@code BACKGROUND}) but it's also not
+     * latency-critical (so it shouldn't compete with the initial fetch a user is staring at).
+     */
+    public static final int PUSH_REFRESH_PRIORITY_DELTA = -5;
+
     private final transient QueryArgument originalArgument;
     private final Object dataSourceId;
     private final DataScope dataScope;
