@@ -163,23 +163,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
         void pushResultToClient(StreamInfo streamInfo, QueryResult queryResult, QueryResultDiff queryResultDiff) {
             streamInfo.lastQueryResult = queryResult;
-            // Strip SQL column names if the client indicated it has them cached (sendMetadata=false),
-            // but keep entityMapping on the wire. Reason: the React client has no DQL runtime so the
-            // wire entityMapping is the only source it has for DQL field paths (e.g. aggregate alias
-            // `n` for the live-viewers query). Relying on the client-side metadata cache here is racy
-            // — empty cache on cold subscribe (reconnects, fresh tabs) caused subscriptions to decode
-            // rows with positional `col0`/`col1` keys for their whole lifetime, producing the
-            // "0 viewers on refresh" bug. The mapping is small (tens to a few hundred bytes) compared
-            // to the row payload, so always sending it is the cheap, correct fix.
-            QueryArgument qa = streamInfo.queryInfo.getQueryArgument();
-            QueryResult wireResult;
-            if (qa != null && !qa.isSendMetadata() && queryResult != null) {
-                wireResult = new QueryResult(queryResult.getRowCount(), queryResult.getColumnCount(), queryResult.getValues(), null);
-                wireResult.setEntityMapping(queryResult.getEntityMapping());
-                wireResult.setVersionNumber(queryResult.getVersionNumber());
-            } else {
-                wireResult = queryResult;
-            }
+            QueryResult wireResult = trimForPush(streamInfo, queryResult);
             Object queryStreamId = streamInfo.queryStreamId;
             Console.log("pushResultToClient() to queryStreamId=" + queryStreamId + " with " + (queryResult != null ? queryResult.getRowCount() + " rows" : "diff"));
             QueryPushServerService.pushQueryResultToClient(new QueryPushResult(queryStreamId, wireResult, queryResultDiff), streamInfo.clientRunId)
@@ -383,6 +367,37 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         }
     }
 
+    /**
+     * Build the wire-side QueryResult for a push: strip column metadata the client already has
+     * cached, and ship entityMapping only on the first push of each stream (the mapping is
+     * invariant for a fixed query, so re-sending it on every push wastes proportional bytes —
+     * especially for queries with deep FK chains or aggregate aliases).
+     * <p>
+     * The first push always carries entityMapping regardless of the client's {@code sendMetadata}
+     * flag — defensive against the "cold cache lying about being warm" race that previously
+     * stranded streams in positional-column-name mode for their whole lifetime. Subsequent
+     * pushes omit it because the client (per-statement {@code QueryMetadataCache}) has it.
+     */
+    private QueryResult trimForPush(StreamInfo streamInfo, QueryResult queryResult) {
+        if (queryResult == null) return null;
+        QueryArgument qa = streamInfo.queryInfo.getQueryArgument();
+        boolean firstPush = !streamInfo.entityMappingSent;
+        boolean clientHasColumnNamesCached = qa != null && !qa.isSendMetadata();
+        if (firstPush && !clientHasColumnNamesCached) {
+            // Cold client subscribe — let the full result through unchanged.
+            streamInfo.entityMappingSent = true;
+            return queryResult;
+        }
+        QueryResult stripped = new QueryResult(queryResult.getRowCount(), queryResult.getColumnCount(), queryResult.getValues(), null);
+        stripped.setVersionNumber(queryResult.getVersionNumber());
+        stripped.setCallSeq(queryResult.getCallSeq());
+        if (firstPush) {
+            stripped.setEntityMapping(queryResult.getEntityMapping());
+            streamInfo.entityMappingSent = true;
+        }
+        return stripped;
+    }
+
     public final class StreamInfo {
         private final long creationTime = now();
         public Object queryStreamId;
@@ -393,6 +408,11 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         public Boolean close;
         public QueryInfo queryInfo;
         private QueryResult lastQueryResult;
+        // Whether the client has already received entityMapping for this stream. Set to true on
+        // the first push that ships metadata so subsequent pushes can omit it from the wire —
+        // entityMapping doesn't change for a fixed query, so re-sending it on every push wastes
+        // bytes proportional to query complexity (FK chains, alias names, etc.).
+        private boolean entityMappingSent;
 
         public StreamInfo(QueryPushArgument arg) {
             queryStreamId = arg.getQueryStreamId();
