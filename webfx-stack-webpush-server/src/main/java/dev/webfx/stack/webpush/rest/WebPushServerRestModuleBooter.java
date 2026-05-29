@@ -1,6 +1,8 @@
 package dev.webfx.stack.webpush.rest;
 
 import dev.webfx.platform.boot.spi.ApplicationModuleBooter;
+import dev.webfx.platform.conf.Config;
+import dev.webfx.platform.conf.ConfigLoader;
 import dev.webfx.platform.console.Console;
 import dev.webfx.platform.service.SingleServiceProvider;
 import dev.webfx.platform.util.vertx.VertxInstance;
@@ -21,10 +23,12 @@ import java.util.ServiceLoader;
  *
  * <h2>What it does at startup</h2>
  * <ol>
- *   <li>Loads {@link WebPushConfig} from the application's config sources. If
- *       VAPID keys are missing (dev / opt-out builds), skips the rest of the
- *       wiring with a single log line — the module becomes a no-op rather
- *       than a startup failure.</li>
+ *   <li>Waits for the application config to finish loading, then reads the
+ *       {@code webpush.vapid} subtree (with {@code ${{ VAR }}} placeholders
+ *       fully resolved against the deployment's variable files). If the
+ *       VAPID keys are missing (dev / opt-out builds), skips the rest of
+ *       the wiring with a single log line — the module becomes a no-op
+ *       rather than a startup failure.</li>
  *   <li>Constructs the default {@link WebPushServerServiceProvider} and
  *       registers it so the {@link WebPushServerService} static facade
  *       works application-wide.</li>
@@ -52,8 +56,17 @@ public final class WebPushServerRestModuleBooter implements ApplicationModuleBoo
 
     @Override
     public void bootModule() {
-        WebPushConfig config = WebPushConfig.fromSourcesConfig();
-        if (config == null) {
+        // Defer to onConfigLoaded so the ${{ VAR }} placeholders in the
+        // webpush.vapid subtree are resolved against the deployment's
+        // variable files (loaded from /opt/kbs/conf/ by the file-based
+        // config plugin). Reading SourcesConfig directly here would only
+        // see the raw classpath bundle — placeholders would leak through.
+        ConfigLoader.onConfigLoaded(WebPushConfig.CONFIG_PATH, this::onWebPushConfigLoaded);
+    }
+
+    private void onWebPushConfigLoaded(Config config) {
+        WebPushConfig webPushConfig = WebPushConfig.from(config);
+        if (webPushConfig == null) {
             Console.log("[" + MODULE_NAME + "] VAPID config absent — Web Push disabled");
             return;
         }
@@ -61,7 +74,7 @@ public final class WebPushServerRestModuleBooter implements ApplicationModuleBoo
         // Register the provider so application code can reach it via the
         // WebPushServerService static facade.
         SingleServiceProvider.registerServiceProvider(
-                WebPushServerServiceProvider.class, new WebPushServiceImpl(config));
+                WebPushServerServiceProvider.class, new WebPushServiceImpl(webPushConfig));
 
         // Wire the rotate-subscription REST endpoint — only if the host
         // application registered a store implementation, since the route
