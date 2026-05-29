@@ -171,6 +171,7 @@
         <module>webfx-stack-shareddata-cache-localstorage-plugin</module>
         <module>webfx-stack-shareddata-cache-serial</module>
         <module>webfx-stack-shareddata-cache-storage</module>
+        <module>webfx-stack-webpush-server</module>
     </modules>
 
 </project>
