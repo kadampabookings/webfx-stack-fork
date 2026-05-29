@@ -1,6 +1,7 @@
 package dev.webfx.stack.webpush;
 
 import dev.webfx.platform.conf.Config;
+import dev.webfx.platform.substitution.Substitutor;
 
 /**
  * Configuration for Web Push (VAPID keys + contact subject).
@@ -49,7 +50,7 @@ public final class WebPushConfig {
         String publicKey  = config.getString("publicKey");
         String privateKey = config.getString("privateKey");
         String subject    = config.getString("subject");
-        if (isBlank(publicKey) || isBlank(privateKey)) {
+        if (!Substitutor.areValuesNonNullAndResolved(publicKey, privateKey)) {
             return null;
         }
         return new WebPushConfig(publicKey, privateKey, subject);

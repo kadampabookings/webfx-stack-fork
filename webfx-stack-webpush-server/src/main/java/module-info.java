@@ -27,6 +27,7 @@ module webfx.stack.webpush.server {
     requires webfx.platform.util.vertx;
     requires webfx.stack.routing.router;
     requires webfx.stack.routing.router.vertx;
+    requires webfx.platform.substitution;
 
     // Exported packages
     exports dev.webfx.stack.webpush;
