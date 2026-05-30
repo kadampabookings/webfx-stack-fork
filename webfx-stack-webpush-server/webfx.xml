@@ -27,11 +27,18 @@
     </dependencies>
 
     <providers>
-        <!-- Only the booter is registered statically: the WebPushServerServiceProvider
-             impl needs the resolved WebPushConfig at construction time, so the booter
-             instantiates it and registers it via SingleServiceProvider.registerServiceProvider(...).
-             A static <provider> entry here would require a zero-arg constructor. -->
+        <!-- The booter (and the WebPushServerServiceProvider it registers
+             programmatically) handles the VAPID-config-dependent wiring;
+             a static <provider> entry can't carry the config. -->
         <provider interface="dev.webfx.platform.boot.spi.ApplicationModuleBooter">dev.webfx.stack.webpush.rest.WebPushServerRestModuleBooter</provider>
+
+        <!-- The SendPushNotification BO operation: bus endpoint + argument/result
+             codecs. Stateless — registered statically. The store SPI that
+             resolves recipients is provided separately by the host application
+             (e.g. modality-crm-server-webpush-plugin). -->
+        <provider interface="dev.webfx.stack.com.bus.call.spi.BusCallEndpoint">dev.webfx.stack.webpush.buscall.SendPushNotificationEndpoint</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.SendPushNotificationArgumentSerialCodec</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.SendPushNotificationResultSerialCodec</provider>
     </providers>
 
     <required-libraries>

@@ -24,13 +24,19 @@ module webfx.stack.webpush.server {
     requires webfx.platform.console;
     requires webfx.platform.fetch;
     requires webfx.platform.service;
+    requires webfx.platform.substitution;
     requires webfx.platform.util.vertx;
+    requires webfx.stack.authn;
+    requires webfx.stack.com.bus.call;
+    requires webfx.stack.com.serial;
     requires webfx.stack.routing.router;
     requires webfx.stack.routing.router.vertx;
-    requires webfx.platform.substitution;
+    requires webfx.stack.session.state;
 
     // Exported packages
     exports dev.webfx.stack.webpush;
+    exports dev.webfx.stack.webpush.buscall;
+    exports dev.webfx.stack.webpush.buscall.serial;
     exports dev.webfx.stack.webpush.handler;
     exports dev.webfx.stack.webpush.impl;
     exports dev.webfx.stack.webpush.rest;
@@ -41,5 +47,7 @@ module webfx.stack.webpush.server {
 
     // Provided services
     provides dev.webfx.platform.boot.spi.ApplicationModuleBooter with dev.webfx.stack.webpush.rest.WebPushServerRestModuleBooter;
+    provides dev.webfx.stack.com.bus.call.spi.BusCallEndpoint with dev.webfx.stack.webpush.buscall.SendPushNotificationEndpoint;
+    provides dev.webfx.stack.com.serial.spi.SerialCodec with dev.webfx.stack.webpush.buscall.serial.SendPushNotificationArgumentSerialCodec, dev.webfx.stack.webpush.buscall.serial.SendPushNotificationResultSerialCodec;
 
 }
