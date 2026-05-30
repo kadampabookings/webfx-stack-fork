@@ -28,4 +28,13 @@ public interface WebPushServerServiceProvider {
      *     callers don't need defensive try/catch around the call.
      */
     Future<WebPushResult> send(WebPushSubscription subscription, WebPushPayload payload);
+
+    /**
+     * The server's current VAPID public key — what the application would hand
+     * to a fresh client subscribe so its {@code applicationServerKey} matches.
+     * Used by send-time filters to skip subscriptions whose stored key no
+     * longer matches (env crossover after a DB copy, or post-key-rotation
+     * orphans).
+     */
+    String currentVapidPublicKey();
 }

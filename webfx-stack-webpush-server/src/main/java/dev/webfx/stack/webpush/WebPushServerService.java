@@ -63,4 +63,12 @@ public final class WebPushServerService {
     public static Future<WebPushResult> send(WebPushSubscription subscription, WebPushPayload payload) {
         return getProvider().send(subscription, payload);
     }
+
+    /**
+     * The server's current VAPID public key.
+     * See {@link WebPushServerServiceProvider#currentVapidPublicKey}.
+     */
+    public static String currentVapidPublicKey() {
+        return getProvider().currentVapidPublicKey();
+    }
 }

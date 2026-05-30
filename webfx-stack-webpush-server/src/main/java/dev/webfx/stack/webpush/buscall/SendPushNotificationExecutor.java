@@ -68,7 +68,49 @@ final class SendPushNotificationExecutor {
         }
         final String finalEmailFilter = emailFilter;
         return store.findRecipients(arg.target(), emailFilter)
-                .compose(subs -> sendAll(subs, arg, callerEmail, finalEmailFilter));
+                .compose(subs -> sendAll(filterByCurrentVapidKey(subs, callerEmail),
+                                         arg, callerEmail, finalEmailFilter));
+    }
+
+    /**
+     * Drop subscriptions whose stored {@code vapidPublicKey} doesn't match
+     * the server's current VAPID identity. Catches two scenarios:
+     * <ul>
+     *   <li><b>Env crossover</b>: after a prod→staging DB copy, staging holds
+     *       production-origin subscriptions. Sending to them would have the
+     *       push service return 403 (VAPID JWT signed with staging's key but
+     *       the subscription expects production's). Skipping them avoids the
+     *       round-trip and keeps the failed-count meaningful.</li>
+     *   <li><b>Key rotation</b>: if the server's VAPID keypair is rotated,
+     *       all pre-rotation subscriptions become unreachable. Same treatment.</li>
+     * </ul>
+     * Subscriptions with {@code vapidPublicKey == null} (legacy rows that
+     * pre-date the column) pass through — once backfilled, all rows will have
+     * a non-null value and this lenient branch becomes a no-op.
+     */
+    private static List<WebPushSubscription> filterByCurrentVapidKey(
+            List<WebPushSubscription> subs, String callerEmail) {
+        String currentKey = WebPushServerService.currentVapidPublicKey();
+        if (currentKey == null) {
+            // No VAPID config — Web Push is disabled anyway; we wouldn't get
+            // here in practice since the endpoint registration is also gated.
+            return subs;
+        }
+        int dropped = 0;
+        List<WebPushSubscription> kept = new ArrayList<>(subs.size());
+        for (WebPushSubscription s : subs) {
+            if (s.vapidPublicKey() == null || currentKey.equals(s.vapidPublicKey())) {
+                kept.add(s);
+            } else {
+                dropped++;
+            }
+        }
+        if (dropped > 0) {
+            Console.log("[SendPushNotification] caller=" + callerEmail
+                    + " — skipped " + dropped + " subscription(s) with foreign VAPID key"
+                    + " (likely env crossover or pre-rotation orphan)");
+        }
+        return kept;
     }
 
     private static Future<SendPushNotificationResult> sendAll(

@@ -21,14 +21,21 @@ import java.nio.charset.StandardCharsets;
  */
 public final class WebPushServiceImpl implements WebPushServerServiceProvider {
 
+    private final String vapidPublicKey;
     private final PayloadEncryptor encryptor;
     private final PushServiceClient client;
 
     public WebPushServiceImpl(WebPushConfig config) {
+        this.vapidPublicKey = config.publicKey();
         VapidSigner signer = new VapidSigner(
                 config.publicKey(), config.privateKey(), config.subject());
         this.encryptor = new PayloadEncryptor();
         this.client = new PushServiceClient(signer);
+    }
+
+    @Override
+    public String currentVapidPublicKey() {
+        return vapidPublicKey;
     }
 
     @Override
