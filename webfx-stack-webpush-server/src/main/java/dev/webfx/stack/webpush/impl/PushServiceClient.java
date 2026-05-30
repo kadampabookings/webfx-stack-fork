@@ -1,6 +1,7 @@
 package dev.webfx.stack.webpush.impl;
 
 import dev.webfx.platform.async.Future;
+import dev.webfx.platform.console.Console;
 import dev.webfx.platform.fetch.Fetch;
 import dev.webfx.platform.fetch.FetchOptions;
 import dev.webfx.platform.fetch.Headers;
@@ -68,9 +69,46 @@ public final class PushServiceClient {
                 .setHeaders(headers)
                 .setBody(encryptedBody);
 
+        // Log the outgoing request — just enough to correlate with the push
+        // service's logs and not so much that we leak the (encrypted) body or
+        // the VAPID JWT. Endpoint is the most diagnostic field: it identifies
+        // which push service (FCM / Mozilla / APNs domain) and which device
+        // subscription this targets.
+        Console.log("[webpush] POST " + truncate(endpointUrl, 100)
+                + " ttl=" + payload.ttlSeconds()
+                + " urgency=" + payload.urgency().wireValue()
+                + " bodyBytes=" + encryptedBody.length);
+
         return Fetch.fetch(endpointUrl, options)
-                .map(PushServiceClient::interpret)
-                .otherwise(err -> new WebPushResult.Failed(0, "Network error: " + err.getMessage()));
+                .compose(response -> {
+                    int status = response.status();
+                    // 2xx happy path: terse one-line log. Anything else: also
+                    // dump the response body — push services tend to include
+                    // useful diagnostic JSON ("InvalidRegistration", "MismatchSenderId",
+                    // VAPID validation hints, etc.) on errors.
+                    if (status >= 200 && status < 300) {
+                        Console.log("[webpush] ← " + status + " " + response.statusText());
+                        return Future.succeededFuture(interpret(response));
+                    }
+                    return response.text().map(body -> {
+                        Console.log("[webpush] ← " + status + " " + response.statusText()
+                                + " body=" + truncate(body, 500));
+                        return interpret(response);
+                    }).otherwise(bodyErr -> {
+                        Console.log("[webpush] ← " + status + " " + response.statusText()
+                                + " (body read failed: " + bodyErr.getMessage() + ")");
+                        return interpret(response);
+                    });
+                })
+                .otherwise(err -> {
+                    Console.log("[webpush] ← network error: " + err.getMessage());
+                    return new WebPushResult.Failed(0, "Network error: " + err.getMessage());
+                });
+    }
+
+    private static String truncate(String s, int max) {
+        if (s == null) return "null";
+        return s.length() <= max ? s : s.substring(0, max) + "…(+" + (s.length() - max) + ")";
     }
 
     /**
