@@ -47,7 +47,7 @@ module webfx.stack.webpush.server {
 
     // Provided services
     provides dev.webfx.platform.boot.spi.ApplicationModuleBooter with dev.webfx.stack.webpush.rest.WebPushServerRestModuleBooter;
-    provides dev.webfx.stack.com.bus.call.spi.BusCallEndpoint with dev.webfx.stack.webpush.buscall.SendPushNotificationEndpoint;
-    provides dev.webfx.stack.com.serial.spi.SerialCodec with dev.webfx.stack.webpush.buscall.serial.SendPushNotificationArgumentSerialCodec, dev.webfx.stack.webpush.buscall.serial.SendPushNotificationResultSerialCodec;
+    provides dev.webfx.stack.com.bus.call.spi.BusCallEndpoint with dev.webfx.stack.webpush.buscall.SendPushNotificationEndpoint, dev.webfx.stack.webpush.buscall.UnsubscribePushNotificationsEndpoint;
+    provides dev.webfx.stack.com.serial.spi.SerialCodec with dev.webfx.stack.webpush.buscall.serial.SendPushNotificationArgumentSerialCodec, dev.webfx.stack.webpush.buscall.serial.SendPushNotificationResultSerialCodec, dev.webfx.stack.webpush.buscall.serial.UnsubscribePushNotificationsArgumentSerialCodec, dev.webfx.stack.webpush.buscall.serial.UnsubscribePushNotificationsResultSerialCodec;
 
 }

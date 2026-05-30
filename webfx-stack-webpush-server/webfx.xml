@@ -39,6 +39,12 @@
         <provider interface="dev.webfx.stack.com.bus.call.spi.BusCallEndpoint">dev.webfx.stack.webpush.buscall.SendPushNotificationEndpoint</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.SendPushNotificationArgumentSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.SendPushNotificationResultSerialCodec</provider>
+
+        <!-- The UnsubscribePushNotifications FO operation: same shape as above
+             but invoked from the public /unsubscribe page (auth optional). -->
+        <provider interface="dev.webfx.stack.com.bus.call.spi.BusCallEndpoint">dev.webfx.stack.webpush.buscall.UnsubscribePushNotificationsEndpoint</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.UnsubscribePushNotificationsArgumentSerialCodec</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.UnsubscribePushNotificationsResultSerialCodec</provider>
     </providers>
 
     <required-libraries>

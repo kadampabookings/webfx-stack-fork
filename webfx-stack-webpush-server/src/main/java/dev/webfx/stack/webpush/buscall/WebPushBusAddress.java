@@ -11,5 +11,8 @@ public final class WebPushBusAddress {
     /** Send a Web Push notification to subscribers matching a host-defined target. */
     public static final String SEND_PUSH_NOTIFICATION_ADDRESS = "service/push/sendNotification";
 
+    /** Unsubscribe an email (all opt-ins) from Web Push notifications. */
+    public static final String UNSUBSCRIBE_PUSH_NOTIFICATIONS_ADDRESS = "service/push/unsubscribe";
+
     private WebPushBusAddress() {}
 }

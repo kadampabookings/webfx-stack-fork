@@ -52,6 +52,19 @@ public interface WebPushSubscriptionStore {
     );
 
     /**
+     * Soft-unsubscribe every active recipient row matching {@code email} —
+     * implementations should set an "unsubscribed-at" timestamp (or
+     * equivalent inactive marker) rather than DELETE, so opt-out rates stay
+     * queryable for statistics. Idempotent: re-running on already-unsubscribed
+     * rows is a no-op and should not be counted in the result.
+     *
+     * @return the number of rows newly marked as unsubscribed (zero if the
+     *     email had no active opt-ins). Surfaces to the operator as "you
+     *     unsubscribed from N notification channels".
+     */
+    Future<Integer> unsubscribeByEmail(String email);
+
+    /**
      * Resolve the set of subscriptions a broadcast should reach.
      *
      * @param target      An opaque host-defined object describing which
