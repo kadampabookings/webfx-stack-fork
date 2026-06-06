@@ -126,6 +126,20 @@ final class VertxHttpRouterConfigurator {
             routingContext.next();
         });
 
+        // React/Vite perfect caching: files under /assets/ are content-hashed (e.g. index-Dwk1fx0A.js,
+        // vendor-l0sNRNKZ.js), so they are immutable and can be cached forever. A new build produces new
+        // file names, and index.html (kept no-store by the catch-all .* route above) always points at the
+        // latest ones - so the browser reuses cached chunks across refreshes instead of re-downloading them.
+        // This overrides the no-store header set by the .* route (putHeader replaces the previous value).
+        router.routeWithRegex(".*/assets/.*").handler(routingContext -> {
+            routingContext.response()
+                .putHeader("Cache-Control", "public, max-age=31556926, immutable")
+                .putHeader("Pragma", "public")
+                .putHeader("Expires", "1000000000000")
+            ;
+            routingContext.next();
+        });
+
         /*
         // For xxx.nocache.js GWT files, "no-cache" would work also in theory, but in practice it seems that now
         // browsers - or at least Chrome - are not checking those files if index.html hasn't changed! A shame because
