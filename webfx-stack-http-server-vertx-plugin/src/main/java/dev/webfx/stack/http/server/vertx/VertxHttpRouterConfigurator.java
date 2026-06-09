@@ -26,12 +26,32 @@ import java.util.stream.Stream;
  */
 final class VertxHttpRouterConfigurator {
 
+    // Set to true by VertxHttpVerticle once the HTTP server is listening and serving the
+    // finalised router; reset on shutdown. Used by the /health endpoint below as the
+    // load-balancer readiness signal (e.g. AWS ALB target group health check).
+    static volatile boolean serverReady = false;
+
     static Router initialiseRouter() {
         Vertx vertx = VertxInstance.getVertx();
         Router router = Router.router(vertx);
 
         // Logging web requests
         router.route().handler(LoggerHandler.create());
+
+        // Lightweight health/readiness endpoint for load balancers (e.g. AWS ALB target group
+        // health checks). Returns 200 only once the HTTP server is fully started and serving the
+        // finalised router; 503 while still booting or draining. Registered before the session and
+        // static handlers so it stays cheap, session-free, and always takes precedence over the SPA
+        // routes (unlike /index.html, which is a static file ready before the app and matched only
+        // for text/html requests). See VertxHttpVerticle, which sets serverReady on listen success.
+        router.route(HttpMethod.GET, "/health").handler(routingContext -> {
+            boolean ready = serverReady;
+            routingContext.response()
+                .putHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
+                .putHeader("Content-Type", "text/plain; charset=UTF-8")
+                .setStatusCode(ready ? 200 : 503)
+                .end(ready ? "OK" : "STARTING");
+        });
 
         // The session store to use
         router.route().handler(SessionHandler.create(VertxInstance.getSessionStore()));
