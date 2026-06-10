@@ -17,6 +17,7 @@ import dev.webfx.stack.db.submit.SubmitResult;
 import dev.webfx.stack.db.submit.listener.SubmitListenerService;
 import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
+import io.vertx.core.net.ClientSSLOptions;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
 import io.vertx.pgclient.SslMode;
@@ -62,9 +63,14 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // Use TLS when the server offers it: AWS RDS enforces rds.force_ssl=1 so the connection must
         // be encrypted, while PREFER still falls back to plaintext for servers that don't support SSL
         // (e.g. local dev / the current LiquidWeb host) — so this is a safe universal default.
-        // PREFER encrypts without certificate verification (≈ sslmode=require); harden to VERIFY_FULL
-        // + the RDS CA bundle later if stronger guarantees are needed.
         connectOptions.setSslMode(SslMode.PREFER);
+        // RDS's server certificate is signed by the Amazon RDS CA, which isn't in the JVM's default
+        // trust store. Without trust config, Vert.x 5 fails cert verification and PREFER silently falls
+        // back to plaintext (which RDS then rejects with "no encryption"). trustAll keeps the connection
+        // encrypted without verifying the chain (≈ sslmode=require). To harden to full verification,
+        // replace setTrustAll(true) with setTrustOptions(new PemTrustOptions().addCertPath("rds-ca.pem"))
+        // and SslMode.VERIFY_FULL.
+        connectOptions.setSslOptions(new ClientSSLOptions().setTrustAll(true));
 
         // Pool Options
         PoolOptions poolOptions = new PoolOptions()
