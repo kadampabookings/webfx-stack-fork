@@ -19,6 +19,7 @@ import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
+import io.vertx.pgclient.SslMode;
 import io.vertx.sqlclient.*;
 
 import java.util.ArrayList;
@@ -58,6 +59,12 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             .setDatabase(cd.getDatabaseName())
             .setUser(cd.getUsername())
             .setPassword(cd.getPassword());
+        // Use TLS when the server offers it: AWS RDS enforces rds.force_ssl=1 so the connection must
+        // be encrypted, while PREFER still falls back to plaintext for servers that don't support SSL
+        // (e.g. local dev / the current LiquidWeb host) — so this is a safe universal default.
+        // PREFER encrypts without certificate verification (≈ sslmode=require); harden to VERIFY_FULL
+        // + the RDS CA bundle later if stronger guarantees are needed.
+        connectOptions.setSslMode(SslMode.PREFER);
 
         // Pool Options
         PoolOptions poolOptions = new PoolOptions()
