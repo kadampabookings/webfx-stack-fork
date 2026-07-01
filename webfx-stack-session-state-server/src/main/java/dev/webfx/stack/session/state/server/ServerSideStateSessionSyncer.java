@@ -73,16 +73,49 @@ public final class ServerSideStateSessionSyncer {
 
     private static Future<IsolatedSession> syncFixedServerSessionFromIncomingClientStateWithUserIdCheckFirst(IsolatedSession serverSession, Object clientState, boolean forceStore) {
         Object userId = StateAccessor.getUserId(clientState);
-        // Case when the user hasn't changed (userId == null => not yet logged in or is the same user as last time in this server session)
-        // Also skip when the incoming userId matches the session's current userId AND the client
-        // runId matches the session's stored runId (same connection, not a new page load). This
-        // handles clients (e.g. React) that resend all state properties on every request rather
-        // than only sending userId on change (as the Java ClientSideStateSessionSyncer does).
-        // On a new connection (runId mismatch or new session), we always run the full check to
-        // ensure authorizations are refreshed even if the userId hasn't changed.
+        Object sessionUserId = SessionAccessor.getUserId(serverSession);
+        // A "public" principal is one that isn't a logged-in user: either no userId at all (never logged in),
+        // or the explicit LOGOUT_USER_ID. Note the client keeps re-communicating LOGOUT_USER_ID on every
+        // message, INCLUDING on a fresh app start / page reload — so on a logged-out reload the incoming userId
+        // is LOGOUT_USER_ID, not null.
+        boolean incomingPublic = LogoutUserId.isLogoutUserIdOrNull(userId);
+        boolean sessionPublic = LogoutUserId.isLogoutUserIdOrNull(sessionUserId);
         boolean sameConnection = Objects.equals(StateAccessor.getRunId(clientState), SessionAccessor.getRunId(serverSession));
-        if (userId == null || userIdChecker == null || (sameConnection && Objects.equals(userId, SessionAccessor.getUserId(serverSession))))
-            return syncFixedServerSessionFromIncomingClientState(serverSession, clientState, forceStore);
+        // Skip the user-identity check when there's no genuine login transition to validate:
+        //   - userId == null: the client isn't communicating any userId (the Java client sends it only on change).
+        //   - no checker configured.
+        //   - same connection and unchanged userId: nothing relevant changed on an existing connection. This
+        //     handles clients (e.g. React) that resend all state properties on every request.
+        //   - both the incoming principal AND the session are public (logged out / never logged in): the client
+        //     is merely re-communicating its logged-out state (e.g. on a page reload), NOT performing a fresh
+        //     logout transition — so we must NOT divert it through LogoutPush below. A real logout transition
+        //     (session still holds a real user) keeps going to the full-check path so LogoutPush still runs.
+        // On a new connection (runId mismatch or new session), a logged-in user still runs the full check to
+        // ensure authorizations are refreshed even if the userId hasn't changed.
+        if (userId == null || userIdChecker == null
+                || (sameConnection && Objects.equals(userId, sessionUserId))
+                || (incomingPublic && sessionPublic)) {
+            // No user identity to check here. We sync the session as usual...
+            Future<IsolatedSession> future = syncFixedServerSessionFromIncomingClientState(serverSession, clientState, forceStore);
+            // ...but a freshly connected (or reconnected) public client must ALSO receive its authorizations.
+            // The system grants authorizations to the public too (operations flagged 'public'), not only to
+            // logged-in users, so those must be pushed even when there's no logged-in userId. We push only when:
+            //   - it's a new connection (the client communicates a runId that differs from the one already stored
+            //     in the session — on the first message of a connection the session has no runId yet), which
+            //     avoids re-pushing on every subsequent message of the same connection; AND
+            //   - BOTH the incoming principal and the session are public — so we never clobber a genuinely
+            //     logged-in session (e.g. a Java client reconnecting without re-sending its userId) with the
+            //     public authorization set. Logged-in users are handled by the full-check path below and the
+            //     outgoing-state path.
+            if (!sameConnection && userIdAuthorizer != null && incomingPublic && sessionPublic) {
+                // The push targets the client by runId, so ensure it's set in the state we run the push with.
+                if (StateAccessor.getRunId(clientState) == null)
+                    StateAccessor.setRunId(clientState, SessionAccessor.getRunId(serverSession));
+                if (StateAccessor.getRunId(clientState) != null) // only push when we know which client to push to
+                    ThreadLocalStateHolder.runWithState(clientState, () -> userIdAuthorizer.apply(null));
+            }
+            return future;
+        }
         // Case when the user is set => login or user switch, or logout (LOGOUT_USER_ID)
         return ThreadLocalStateHolder.runWithState(clientState, () -> userIdChecker.apply(userId))
             // If the user identity check failed (ex: no such user exception), we log out the user
