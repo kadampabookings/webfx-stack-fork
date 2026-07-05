@@ -72,8 +72,14 @@ final class VertxSqlUtil {
             generatedKeys = new ArrayList<>();
         for (; rows != null; rows = rows.next(), rowCount++) {
             if (generatedKeys != null) {
-                Row row = rows.iterator().next();
-                generatedKeys.add(row.getValue(0));
+                // The " returning " detection above is a substring match, so it can misfire on
+                // statements that merely CONTAIN the word without returning rows (e.g. a CREATE
+                // FUNCTION whose PL/pgSQL body has an INSERT ... RETURNING — found by the V0003
+                // boot migration), and a genuine RETURNING can also affect zero rows. An empty
+                // row set must contribute no key rather than throw NoSuchElementException.
+                var iterator = rows.iterator();
+                if (iterator.hasNext())
+                    generatedKeys.add(iterator.next().getValue(0));
             }
         }
         return new SubmitResult(rowCount, generatedKeys == null ? null : generatedKeys.toArray());
