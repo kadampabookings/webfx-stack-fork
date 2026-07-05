@@ -105,6 +105,7 @@
         <module>webfx-stack-com-websocket-jre</module>
         <module>webfx-stack-db-datascope</module>
         <module>webfx-stack-db-datasource</module>
+        <module>webfx-stack-db-migration</module>
         <module>webfx-stack-db-query</module>
         <module>webfx-stack-db-query-buscall</module>
         <module>webfx-stack-db-query-remote</module>

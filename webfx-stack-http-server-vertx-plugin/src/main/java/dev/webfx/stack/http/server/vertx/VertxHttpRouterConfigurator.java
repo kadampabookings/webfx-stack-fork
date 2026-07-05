@@ -1,6 +1,7 @@
 package dev.webfx.stack.http.server.vertx;
 
 import dev.webfx.platform.ast.ReadOnlyAstArray;
+import dev.webfx.platform.boot.ApplicationReadiness;
 import dev.webfx.platform.console.Console;
 import dev.webfx.platform.util.vertx.VertxInstance;
 import io.vertx.core.Vertx;
@@ -40,17 +41,20 @@ final class VertxHttpRouterConfigurator {
 
         // Lightweight health/readiness endpoint for load balancers (e.g. AWS ALB target group
         // health checks). Returns 200 only once the HTTP server is fully started and serving the
-        // finalised router; 503 while still booting or draining. Registered before the session and
-        // static handlers so it stays cheap, session-free, and always takes precedence over the SPA
-        // routes (unlike /index.html, which is a static file ready before the app and matched only
-        // for text/html requests). See VertxHttpVerticle, which sets serverReady on listen success.
+        // finalised router AND all application readiness gates are completed (e.g. DB migrations —
+        // see ApplicationReadiness); 503 while still booting, waiting on a gate, or draining.
+        // Registered before the session and static handlers so it stays cheap, session-free, and
+        // always takes precedence over the SPA routes (unlike /index.html, which is a static file
+        // ready before the app and matched only for text/html requests). See VertxHttpVerticle,
+        // which sets serverReady on listen success.
         router.route(HttpMethod.GET, "/health").handler(routingContext -> {
-            boolean ready = serverReady;
+            boolean listening = serverReady;
+            boolean ready = listening && ApplicationReadiness.areAllGatesReady();
             routingContext.response()
                 .putHeader("Cache-Control", "no-cache, no-store, must-revalidate, max-age=0")
                 .putHeader("Content-Type", "text/plain; charset=UTF-8")
                 .setStatusCode(ready ? 200 : 503)
-                .end(ready ? "OK" : "STARTING");
+                .end(ready ? "OK" : !listening ? "STARTING" : "WAITING: " + ApplicationReadiness.pendingGateNames());
         });
 
         // The session store to use
