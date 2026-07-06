@@ -53,6 +53,7 @@ final class DbMigrationRunner {
         "success boolean NOT NULL, " +
         "error text)";
     private static final String CREATE_LOG_INDEX = "CREATE UNIQUE INDEX IF NOT EXISTS db_migration_success_version ON db_migration (version) WHERE success";
+    private static final String LOG_TABLE_EXISTS = "SELECT to_regclass('db_migration') IS NOT NULL";
     private static final String SELECT_APPLIED = "SELECT version, checksum FROM db_migration WHERE success";
     // execution_time_ms = time elapsed since the beginning of the migration transaction (cumulative across scripts)
     private static final String INSERT_SUCCESS_ROW = "INSERT INTO db_migration (version, file_name, checksum, execution_time_ms, success) " +
@@ -80,14 +81,33 @@ final class DbMigrationRunner {
             });
     }
 
-    private Future<SubmitResult> ensureLogTable() {
+    private Future<Void> ensureLogTable() {
+        // Only attempt the DDL when the table doesn't exist yet: unlike CREATE TABLE IF NOT EXISTS (which
+        // just emits a notice on an existing table), CREATE INDEX IF NOT EXISTS checks table OWNERSHIP before
+        // its if-not-exists short-circuit, so a less-privileged db user (e.g. a dev machine connected to a
+        // shared database already migrated by the deployed server) could never even reach the no-op path.
+        return queryBoolean(LOG_TABLE_EXISTS).compose(exists -> {
+            if (exists)
+                return Future.succeededFuture();
+            return createLogTableAndIndex()
+                // Two instances booting at once can (rarely) collide on the concurrent CREATE ... IF NOT EXISTS;
+                // by the time we retry, the other instance has created it and IF NOT EXISTS makes this a no-op.
+                .recover(e -> delay(1_000).compose(v -> createLogTableAndIndex()))
+                .map(r -> null);
+        });
+    }
+
+    private Future<SubmitResult> createLogTableAndIndex() {
         return submit(CREATE_LOG_TABLE)
-            .compose(r -> submit(CREATE_LOG_INDEX))
-            // Two instances booting at once can (rarely) collide on the concurrent CREATE ... IF NOT EXISTS;
-            // by the time we retry, the other instance has created it and IF NOT EXISTS makes this a no-op.
-            .recover(e -> delay(1_000)
-                .compose(v -> submit(CREATE_LOG_TABLE))
-                .compose(r -> submit(CREATE_LOG_INDEX)));
+            .compose(r -> submit(CREATE_LOG_INDEX));
+    }
+
+    private Future<Boolean> queryBoolean(String statement) {
+        return QueryService.executeQuery(new QueryArgumentBuilder()
+                .setDataSourceId(dataSourceId)
+                .setStatement(statement)
+                .build())
+            .map(rs -> Boolean.TRUE.equals(rs.getValue(0, 0)));
     }
 
     private Future<Map<Integer, String>> loadAppliedChecksumsByVersion() {

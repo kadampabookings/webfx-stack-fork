@@ -15,6 +15,7 @@ module webfx.stack.db.migration {
     // Direct dependencies modules
     requires webfx.platform.async;
     requires webfx.platform.boot;
+    requires webfx.platform.conf;
     requires webfx.platform.console;
     requires webfx.platform.scheduler;
     requires webfx.platform.service;

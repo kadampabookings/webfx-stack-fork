@@ -2,6 +2,7 @@ package dev.webfx.stack.db.migration;
 
 import dev.webfx.platform.boot.ApplicationReadiness;
 import dev.webfx.platform.boot.spi.ApplicationJob;
+import dev.webfx.platform.conf.ConfigLoader;
 import dev.webfx.platform.console.Console;
 import dev.webfx.platform.service.SingleServiceProvider;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
@@ -23,6 +24,11 @@ import java.util.ServiceLoader;
 public final class DbMigrationJob implements ApplicationJob {
 
     private static final String READINESS_GATE_NAME = "db-migration";
+    private static final String CONFIG_PATH = "webfx.stack.db.migration";
+    // Set `webfx.stack.db.migration.apply = false` (e.g. in a dev machine's conf/ override) to prevent this
+    // instance from applying migrations — the deployed pipeline is then the only writer of the shared
+    // database's schema. The job just logs the bundled scripts and completes the readiness gate.
+    private static final String APPLY_CONFIG_KEY = "apply";
 
     @Override
     public void onInit() {
@@ -47,13 +53,20 @@ public final class DbMigrationJob implements ApplicationJob {
             markReady.run();
             return;
         }
-        log("Waiting for the datasource before checking DB migrations (" + scripts.size() + " scripts bundled)...");
-        LocalDataSourceService.onInitialised(() ->
-            new DbMigrationRunner(scriptsProvider.getDataSourceId(), scripts).run()
-                .onSuccess(result -> {
-                    log("✅ DB migration: " + result);
-                    markReady.run();
-                })
-                .onFailure(e -> Console.error("❌ DB MIGRATION FAILED — all changes have been rolled back, and this application will stay unhealthy (/health = 503) so a blue/green deployment rolls back to the previous version. Check the db_migration table (success = false rows) and the logs above.", e)));
+        ConfigLoader.onConfigLoaded(CONFIG_PATH, config -> { // config is null when the path is not declared anywhere
+            if (config != null && Boolean.FALSE.equals(config.getBoolean(APPLY_CONFIG_KEY, Boolean.TRUE))) {
+                log("⏭️ DB migration apply is disabled on this instance (" + CONFIG_PATH + "." + APPLY_CONFIG_KEY + " = false) — " + scripts.size() + " scripts bundled but not applied; the deployed pipeline is responsible for applying them");
+                markReady.run();
+                return;
+            }
+            log("Waiting for the datasource before checking DB migrations (" + scripts.size() + " scripts bundled)...");
+            LocalDataSourceService.onInitialised(() ->
+                new DbMigrationRunner(scriptsProvider.getDataSourceId(), scripts).run()
+                    .onSuccess(result -> {
+                        log("✅ DB migration: " + result);
+                        markReady.run();
+                    })
+                    .onFailure(e -> Console.error("❌ DB MIGRATION FAILED — all changes have been rolled back, and this application will stay unhealthy (/health = 503) so a blue/green deployment rolls back to the previous version. Check the db_migration table (success = false rows) and the logs above.", e)));
+        });
     }
 }
