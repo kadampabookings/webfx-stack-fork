@@ -89,35 +89,56 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
             public KeyDataScope[] getKeyDataScopes() { // Called only if get used
                 if (keyDataScopes == null) {
                     DqlStatement<Object> dqlStatement = dataSourceModel.parseStatement(dqlSubmitStatement);
-                    // Building the schema and aggregate scope
+                    DomainClass domainClass = dqlStatement.getDomainClass() instanceof DomainClass ? (DomainClass) dqlStatement.getDomainClass()
+                            : dataSourceModel.getDomainModel().getClass(dqlStatement.getDomainClass());
+                    Object domainClassId = domainClass.getId();
+                    // Building the schema and partition (aggregate) scope. The partition
+                    // rules must be SOUND for the rows' state both BEFORE and AFTER the
+                    // statement, otherwise queries watching the "old" state miss their
+                    // refresh (the historical rooms-drag&drop bug):
+                    //  - Update: schema = SET fields; partitions from WHERE equalities on
+                    //    fields NOT being modified (their values hold before and after —
+                    //    a SET field's OLD value is unknown, so it contributes none).
+                    //  - Insert: schema = whole class; partitions from the SET clause
+                    //    (the new row's values are the only affected state).
+                    //  - Delete: schema = whole class; partitions from WHERE equalities.
+                    // Additionally, every written FK WIDENS the schema scope to the
+                    // referenced class: PostgreSQL denormalization triggers follow FK
+                    // edges (ex: document_line writes update document totals), so the
+                    // parent row must be assumed touched — with its identity partition
+                    // when the FK value is resolvable, so parent watchers of OTHER rows
+                    // can still be skipped.
                     SchemaScopeBuilder ssb = SchemaScope.builder();
                     AggregateScopeBuilder asb = AggregateScope.builder();
-                    if (dqlStatement instanceof Update) { // Update => only fields in set clause are impacted
-                        for (Expression<?> expression : ((Update<Object>) dqlStatement).getSetClause().getExpressions()) {
-                            if (expression instanceof Equals) {
+                    if (dqlStatement instanceof Update) {
+                        Update<Object> update = (Update<Object>) dqlStatement;
+                        java.util.Set<Object> setFieldIds = new java.util.HashSet<>();
+                        for (Expression<?> expression : update.getSetClause().getExpressions()) {
+                            if (expression instanceof Equals && ((Equals<?>) expression).getLeft() instanceof DomainField) {
                                 Equals<?> equals = (Equals<?>) expression;
-                                Expression<?> left = equals.getLeft();
-                                if (left instanceof DomainField) {
-                                    DomainField domainField = (DomainField) left;
-                                    ssb.addField(domainField.getDomainClass().getId(), domainField.getId());
-                                    DomainClass foreignClass = domainField.getForeignClass();
-                                    if (foreignClass != null && foreignClass.isAggregate()) {
-                                        Expression<?> right = equals.getRight();
-                                        Object value = null;
-                                        if (right instanceof Constant)
-                                            value = ((Constant<?>) right).getConstantValue();
-                                        else if (right instanceof ParameterReference)
-                                            value = parameters[0]; // TODO compute the correct parameter index
-                                        if (value != null)
-                                            asb.addAggregate(foreignClass.getName(), value);
-                                    }
-                                }
+                                DomainField field = (DomainField) equals.getLeft();
+                                ssb.addField(field.getDomainClass().getId(), field.getId());
+                                setFieldIds.add(field.getId());
+                                widenToForeignParent(ssb, asb, field, equals.getRight(), parameters);
                             }
                         }
-                    } else { // Insert or Delete => all fields are impacted
-                        DomainClass domainClass = dqlStatement.getDomainClass() instanceof DomainClass ? (DomainClass) dqlStatement.getDomainClass()
-                                : dataSourceModel.getDomainModel().getClass(dqlStatement.getDomainClass());
-                        ssb.addClass(domainClass.getId());
+                        DqlScopeUtil.addPartitions(asb, update.getWhere(), parameters, setFieldIds, domainClassId);
+                    } else { // Insert or Delete => all fields of the class are impacted
+                        ssb.addClass(domainClassId);
+                        if (dqlStatement instanceof Insert) {
+                            ExpressionArray<Object> setClause = ((Insert<Object>) dqlStatement).getSetClause();
+                            DqlScopeUtil.addPartitions(asb, setClause, parameters, null, domainClassId);
+                            for (Expression<?> expression : setClause.getExpressions())
+                                if (expression instanceof Equals && ((Equals<?>) expression).getLeft() instanceof DomainField)
+                                    widenToForeignParent(ssb, asb, (DomainField) ((Equals<?>) expression).getLeft(), ((Equals<?>) expression).getRight(), parameters);
+                        } else if (dqlStatement instanceof Delete) {
+                            DqlScopeUtil.addPartitions(asb, dqlStatement.getWhere(), parameters, null, domainClassId);
+                            // The deleted rows' FK values are unknown here — widen to every
+                            // FK parent class of the model (no identity partitions).
+                            for (DomainField field : domainClass.getFields())
+                                if (field.getForeignClass() != null)
+                                    ssb.addClass(field.getForeignClass().getId());
+                        }
                     }
                     SchemaScope schemaScope = ssb.build();
                     AggregateScope aggregateScope = asb.build();
@@ -127,5 +148,20 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
                 return keyDataScopes;
             }
         };
+    }
+
+    /**
+     * Widens the schema scope to a written FK field's referenced class (trigger
+     * cascades follow FK edges), registering the parent row's identity partition
+     * when the FK value is a resolvable scalar.
+     */
+    private static void widenToForeignParent(SchemaScopeBuilder ssb, AggregateScopeBuilder asb, DomainField field, Expression<?> right, Object[] parameters) {
+        DomainClass foreignClass = field.getForeignClass();
+        if (foreignClass == null)
+            return;
+        ssb.addClass(foreignClass.getId());
+        Object parentId = DqlScopeUtil.resolveScalarValue(right, parameters);
+        if (parentId != null)
+            asb.addAggregate(DqlScopeUtil.idPartitionType(foreignClass.getId()), parentId);
     }
 }

@@ -3,6 +3,8 @@ package dev.webfx.stack.orm.dql.querypush.interceptor;
 import dev.webfx.platform.async.Future;
 import dev.webfx.platform.boot.spi.ApplicationJob;
 import dev.webfx.platform.service.SingleServiceProvider;
+import dev.webfx.stack.db.datascope.aggregate.AggregateScope;
+import dev.webfx.stack.db.datascope.aggregate.AggregateScopeBuilder;
 import dev.webfx.stack.db.datascope.schema.SchemaScope;
 import dev.webfx.stack.db.datascope.schema.SchemaScopeBuilder;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
@@ -64,7 +66,18 @@ public class DqlQueryPushInterceptorInitializer implements ApplicationJob {
                             }
                         }
                         SchemaScope querySchemaScope = ssb.build();
-                        queryArgument = QueryArgument.builder().copy(queryArgument).addDataScope(querySchemaScope).build();
+                        dev.webfx.stack.db.query.QueryArgumentBuilder queryArgumentBuilder = QueryArgument.builder().copy(queryArgument).addDataScope(querySchemaScope);
+                        // Partition scope from the where clause (ex: event=$2 → this
+                        // subscription only shows event 1857's rows): the pulse can then
+                        // skip it for modifications provably belonging to other
+                        // partitions — see DqlScopeUtil for the soundness rules.
+                        AggregateScopeBuilder asb = AggregateScope.builder();
+                        Object queriedClassId = parsedStatement.getDomainClass() instanceof dev.webfx.stack.orm.domainmodel.DomainClass
+                                ? ((dev.webfx.stack.orm.domainmodel.DomainClass) parsedStatement.getDomainClass()).getId()
+                                : dataSourceModel.getDomainModel().getClass(parsedStatement.getDomainClass()).getId();
+                        if (DqlScopeUtil.addPartitions(asb, parsedStatement.getWhere(), queryArgument.getParameters(), null, queriedClassId) > 0)
+                            queryArgumentBuilder.addDataScope(asb.build());
+                        queryArgument = queryArgumentBuilder.build();
                         argument = QueryPushArgument.builder().copy(argument).setQueryArgument(queryArgument).build();
                     }
                 }
