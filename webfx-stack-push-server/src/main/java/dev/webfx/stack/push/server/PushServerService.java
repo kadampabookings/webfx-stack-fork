@@ -37,6 +37,14 @@ public final class PushServerService {
         getProvider().clientIsLive(clientRunId);
     }
 
+    /**
+     * Returns the number of clients currently registered on this push server (see
+     * {@link PushServerServiceProvider#getPushClientsCount()}). For monitoring purposes.
+     */
+    public static int getPushClientsCount() {
+        return getProvider().getPushClientsCount();
+    }
+
     public static void addUnresponsivePushClientListener(UnresponsivePushClientListener listener) {
         getProvider().addUnresponsivePushClientListener(listener);
     }

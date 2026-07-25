@@ -5,6 +5,7 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.call.BusCallService;
 import dev.webfx.stack.db.datasource.LocalDataSource;
 import dev.webfx.stack.db.querypush.PulseArgument;
+import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.buscall.QueryPushServiceBusAddress;
@@ -36,6 +37,14 @@ public class LocalOrRemoteQueryPushServiceProvider implements QueryPushServicePr
         if (localConnectedProvider == null)
             throw new UnsupportedOperationException("requestPulse() shouldn't be called on this LocalOrRemoteQueryPushServiceProvider");
         localConnectedProvider.executePulse(argument);
+    }
+
+    @Override
+    public QueryPushMonitorInfo getMonitorInfo() {
+        // Client-side provider: the monitoring snapshot is fetched from the server via the
+        // dedicated buscall endpoint (service/querypush/getMonitorInfo), not through this API,
+        // so there is no local snapshot to return here.
+        return null;
     }
 
     protected QueryPushServiceProvider getOrCreateLocalConnectedProvider(Object dataSourceId) {

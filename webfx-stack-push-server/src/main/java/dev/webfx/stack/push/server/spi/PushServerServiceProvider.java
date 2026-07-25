@@ -19,6 +19,15 @@ public interface PushServerServiceProvider {
 
     void clientIsLive(Object clientRunId);
 
+    /**
+     * Returns the number of clients currently registered on this push server (i.e. clients the
+     * server has pushed to at least once — in practice every connected client, since the server
+     * pushes authorizations to each of them on connection). For monitoring purposes.
+     */
+    default int getPushClientsCount() {
+        return 0;
+    }
+
     void addUnresponsivePushClientListener(UnresponsivePushClientListener listener);
 
     void removeUnresponsivePushClientListener(UnresponsivePushClientListener listener);

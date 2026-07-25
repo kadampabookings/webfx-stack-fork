@@ -10,18 +10,24 @@ import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
+import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
+import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
 import dev.webfx.stack.db.querypush.diff.QueryResultComparator;
 import dev.webfx.stack.db.querypush.diff.QueryResultDiff;
 import dev.webfx.stack.db.querypush.server.QueryPushServerService;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.push.server.PushServerService;
+import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
+import java.util.Set;
 
 /**
  * @author Bruno Salmon
@@ -71,6 +77,60 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     protected abstract void removeStream(StreamInfo streamInfo);
 
     protected abstract void removePushClientStreams(Object clientRunId);
+
+    /** Returns a snapshot of all registered QueryInfos (one per distinct QueryArgument) for monitoring. */
+    protected abstract Collection<QueryInfo> getQueryInfos();
+
+    /** Bounds the parameters display string shipped in the monitor snapshot. */
+    private static final int MONITOR_PARAMETERS_MAX_LENGTH = 200;
+
+    @Override
+    public QueryPushMonitorInfo getMonitorInfo() {
+        // This snapshot exposes the push query statements, so it's reserved for logged-in callers
+        // (the buscall endpoint turns a null return into a failed future). The React back-office
+        // route is additionally super-admin gated on the client. We intentionally gate on a
+        // logged-in userId rather than the back-office flag: userId is reliably present in a
+        // buscall's thread-local state (same read the auth endpoints rely on), whereas the
+        // back-office flag is not consistently propagated on this path.
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId)) {
+            Console.log("[Monitor] getMonitorInfo denied — no logged-in caller (backoffice="
+                + ThreadLocalStateHolder.isBackoffice() + ", userId=" + callerUserId + ")");
+            return null;
+        }
+        List<QueryStreamMonitorInfo> queryStreams = new ArrayList<>();
+        Set<Object> allUserIds = new HashSet<>();
+        for (QueryInfo queryInfo : getQueryInfos()) {
+            synchronized (queryInfo) { // same lock as addStreamInfo/removeStreamInfo/pushResultToRelevantClients
+                Object[] queryStreamIds = new Object[queryInfo.streamInfos.size()];
+                Set<Object> clientRunIds = new HashSet<>();
+                Set<Object> userIds = new HashSet<>();
+                for (int i = 0; i < queryStreamIds.length; i++) {
+                    StreamInfo streamInfo = queryInfo.streamInfos.get(i);
+                    queryStreamIds[i] = streamInfo.queryStreamId;
+                    clientRunIds.add(streamInfo.clientRunId);
+                    if (!LogoutUserId.isLogoutUserIdOrNull(streamInfo.userId))
+                        userIds.add(streamInfo.userId);
+                }
+                allUserIds.addAll(userIds);
+                Object[] parameters = queryInfo.queryArgument.getParameters();
+                String parametersDisplay = parameters == null || parameters.length == 0 ? null : Arrays.toString(parameters);
+                if (parametersDisplay != null && parametersDisplay.length() > MONITOR_PARAMETERS_MAX_LENGTH)
+                    parametersDisplay = parametersDisplay.substring(0, MONITOR_PARAMETERS_MAX_LENGTH) + "…";
+                queryStreams.add(new QueryStreamMonitorInfo(
+                    queryStreamIds,
+                    queryInfo.queryArgument.getStatement(),
+                    parametersDisplay,
+                    queryInfo.lastQueryResult == null ? -1 : queryInfo.lastQueryResult.getRowCount(),
+                    queryInfo.streamInfos.size(),
+                    queryInfo.activeStreamCount,
+                    clientRunIds.size(),
+                    userIds.size(),
+                    queryInfo.lastQueryExecutionTime == 0 ? -1 : now() - queryInfo.lastQueryExecutionTime));
+            }
+        }
+        return new QueryPushMonitorInfo(PushServerService.getPushClientsCount(), allUserIds.size(), queryStreams.toArray(new QueryStreamMonitorInfo[0]));
+    }
 
     public abstract class PulsePass {
         final long startTime = now();
@@ -429,6 +489,9 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         private StreamInfo parentStreamInfo;
         public final List<StreamInfo> childrenStreamInfos = new ArrayList<>();
         public final Object clientRunId;
+        // Captured at subscription time for monitoring (may be null for anonymous clients; a user
+        // logging in after opening the stream is not reflected — new streams will carry the userId).
+        public final Object userId;
         public Boolean active;
         public Boolean close;
         public QueryInfo queryInfo;
@@ -442,6 +505,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         public StreamInfo(QueryPushArgument arg) {
             queryStreamId = arg.getQueryStreamId();
             clientRunId = ThreadLocalStateHolder.getRunId();
+            userId = ThreadLocalStateHolder.getUserId();
             Object parentQueryStreamId = arg.getParentQueryStreamId();
             parentStreamInfo = getStreamInfo(parentQueryStreamId);
             if (parentStreamInfo != null)

@@ -23,4 +23,12 @@ public final class QueryPushService {
         getProvider().executePulse(argument);
     }
 
+    /**
+     * Returns a monitoring snapshot of the query-push state (see
+     * {@link QueryPushServiceProvider#getMonitorInfo()}), or null when not available.
+     */
+    public static QueryPushMonitorInfo getMonitorInfo() {
+        return getProvider().getMonitorInfo();
+    }
+
 }

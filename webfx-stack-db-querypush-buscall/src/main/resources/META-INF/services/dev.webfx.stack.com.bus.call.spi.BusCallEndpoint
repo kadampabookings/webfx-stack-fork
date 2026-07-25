@@ -1,1 +1,2 @@
 dev.webfx.stack.db.querypush.buscall.ExecuteQueryPushMethodEndpoint
+dev.webfx.stack.db.querypush.buscall.GetQueryPushMonitorInfoMethodEndpoint

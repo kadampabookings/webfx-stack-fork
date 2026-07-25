@@ -11,6 +11,7 @@ import dev.webfx.stack.db.datasource.LocalDataSourceService;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
+import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.orm.domainmodel.DataSourceModel;
@@ -39,6 +40,14 @@ public class DqlQueryPushInterceptorInitializer implements ApplicationJob {
                     @Override
                     public void executePulse(PulseArgument argument) {
                         targetProvider.executePulse(argument);
+                    }
+
+                    @Override
+                    public QueryPushMonitorInfo getMonitorInfo() {
+                        // Delegate the monitoring snapshot to the wrapped provider (this
+                        // interceptor only rewrites the query scope on executeQueryPush; without
+                        // this delegation the call would fall through to the SPI default = null).
+                        return targetProvider.getMonitorInfo();
                     }
                 }
         );

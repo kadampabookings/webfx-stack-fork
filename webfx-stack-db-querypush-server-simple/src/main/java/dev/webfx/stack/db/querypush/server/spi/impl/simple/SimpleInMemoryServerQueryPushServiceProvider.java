@@ -9,6 +9,8 @@ import dev.webfx.platform.util.Objects;
 import dev.webfx.platform.async.Future;
 import dev.webfx.platform.util.collection.Collections;
 
+import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -134,6 +136,12 @@ public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQu
     @Override
     protected void removePushClientStreams(Object clientRunId) {
         Collections.forEach(Collections.filter(streamInfos.values(), si -> Objects.areEquals(si.clientRunId, clientRunId)), this::removeStream);
+    }
+
+    @Override
+    protected Collection<QueryInfo> getQueryInfos() {
+        // Defensive copy so the caller can iterate while streams keep being opened/closed
+        return new ArrayList<>(queryInfos.values());
     }
 
     protected PulsePass createPulsePass(PulseArgument argument) {

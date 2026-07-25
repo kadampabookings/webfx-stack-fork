@@ -54,6 +54,11 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     }
 
     @Override
+    public int getPushClientsCount() {
+        return pushClientInfos.size();
+    }
+
+    @Override
     public void addUnresponsivePushClientListener(UnresponsivePushClientListener listener) {
         unresponsivePushClientListeners.add(listener);
     }
