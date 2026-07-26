@@ -11,6 +11,7 @@ import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
 import dev.webfx.stack.db.query.SqlExecutionMonitor;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
+import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
@@ -18,6 +19,7 @@ import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlKindMonitorInfo;
+import dev.webfx.stack.db.querypush.StatementMonitorInfo;
 import dev.webfx.stack.db.querypush.diff.QueryResultComparator;
 import dev.webfx.stack.db.querypush.diff.QueryResultDiff;
 import dev.webfx.stack.db.querypush.server.QueryPushServerService;
@@ -142,10 +144,26 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildCompressionInfo());
     }
 
-    /** Builds the read/write SQL execution DTO from the process-wide {@link SqlExecutionMonitor}. */
+    /** Builds the read/write SQL execution DTO (with top statements + in-flight) from the monitor. */
     private static SqlExecutionMonitorInfo buildSqlExecutionInfo() {
         SqlExecutionMonitor.Snapshot s = SqlExecutionMonitor.get().snapshot();
-        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()));
+        List<SqlExecutionMonitor.StatementSnapshot> ss = s.topStatements();
+        StatementMonitorInfo[] statements = new StatementMonitorInfo[ss.size()];
+        for (int i = 0; i < statements.length; i++) {
+            SqlExecutionMonitor.StatementSnapshot st = ss.get(i);
+            statements[i] = new StatementMonitorInfo(st.statement(), kindName(st.kind()), st.count(), st.totalNanos(), st.maxNanos());
+        }
+        List<SqlExecutionMonitor.InFlightSnapshot> fs = s.inFlight();
+        InFlightQueryMonitorInfo[] flights = new InFlightQueryMonitorInfo[fs.size()];
+        for (int i = 0; i < flights.length; i++) {
+            SqlExecutionMonitor.InFlightSnapshot f = fs.get(i);
+            flights[i] = new InFlightQueryMonitorInfo(f.id(), kindName(f.kind()), f.statement(), f.ageMillis());
+        }
+        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights);
+    }
+
+    private static String kindName(SqlExecutionMonitor.Kind k) {
+        return k == SqlExecutionMonitor.Kind.WRITE ? "write" : "read";
     }
 
     private static SqlKindMonitorInfo toKindInfo(SqlExecutionMonitor.KindSnapshot k) {

@@ -18,8 +18,10 @@
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.QueryPushResultSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.QueryResultTranslationSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.QueryStreamMonitorInfoSerialCodec</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.InFlightQueryMonitorInfoSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.SqlExecutionMonitorInfoSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.SqlKindMonitorInfoSerialCodec</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.StatementMonitorInfoSerialCodec</provider>
     </providers>
 
 </project>

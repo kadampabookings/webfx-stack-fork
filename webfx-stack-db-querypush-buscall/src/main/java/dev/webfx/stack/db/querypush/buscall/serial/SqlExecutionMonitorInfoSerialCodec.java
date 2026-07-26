@@ -3,13 +3,17 @@ package dev.webfx.stack.db.querypush.buscall.serial;
 import dev.webfx.platform.ast.AstObject;
 import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.stack.com.serial.spi.impl.SerialCodecBase;
+import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
+import dev.webfx.stack.db.querypush.StatementMonitorInfo;
 
 public final class SqlExecutionMonitorInfoSerialCodec extends SerialCodecBase<SqlExecutionMonitorInfo> {
 
     private static final String CODEC_ID = "SqlExecutionMonitorInfo";
     private static final String READ_KEY = "read";
     private static final String WRITE_KEY = "write";
+    private static final String TOP_STATEMENTS_KEY = "topStatements";
+    private static final String IN_FLIGHT_KEY = "inFlight";
 
     public SqlExecutionMonitorInfoSerialCodec() {
         super(SqlExecutionMonitorInfo.class, CODEC_ID);
@@ -17,14 +21,18 @@ public final class SqlExecutionMonitorInfoSerialCodec extends SerialCodecBase<Sq
 
     @Override
     public void encode(SqlExecutionMonitorInfo arg, AstObject serial) {
-        encodeObject(serial, READ_KEY,  arg.getRead());
-        encodeObject(serial, WRITE_KEY, arg.getWrite());
+        encodeObject(serial, READ_KEY,           arg.getRead());
+        encodeObject(serial, WRITE_KEY,          arg.getWrite());
+        encodeArray( serial, TOP_STATEMENTS_KEY, arg.getTopStatements());
+        encodeArray( serial, IN_FLIGHT_KEY,      arg.getInFlight());
     }
 
     @Override
     public SqlExecutionMonitorInfo decode(ReadOnlyAstObject serial) {
         return new SqlExecutionMonitorInfo(
             decodeObject(serial, READ_KEY),
-            decodeObject(serial, WRITE_KEY));
+            decodeObject(serial, WRITE_KEY),
+            decodeArray( serial, TOP_STATEMENTS_KEY, StatementMonitorInfo.class),
+            decodeArray( serial, IN_FLIGHT_KEY, InFlightQueryMonitorInfo.class));
     }
 }

@@ -160,9 +160,13 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
     }
 
     private io.vertx.core.Future<QueryResult> executeConnectionQuery(SqlConnection connection, QueryArgument argument) {
+        // Register this actual SQL execution in the monitor (statement + cancel handle), for the
+        // /monitor in-flight list + per-statement rollup; deregister on completion.
+        long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection));
         return connection
             .preparedQuery(argument.getStatement())
             .execute(tupleFromArguments(argument.getParameters()))
+            .onComplete(ar -> SqlExecutionMonitor.get().onEnd(monId))
             .map(rs -> {
                 QueryResult result = VertxSqlUtil.toWebFxQueryResult(rs);
                 // Echo the caller's fire sequence so the client can discard stale results when
@@ -170,6 +174,15 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                 result.setCallSeq(argument.getCallSeq());
                 return result;
             });
+    }
+
+    /** Best-effort cancel handle for an executing statement: the Vert.x PgConnection (null if not PG). */
+    private static Object pgCancelHandle(SqlConnection connection) {
+        try {
+            return io.vertx.pgclient.PgConnection.cast(connection);
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     @Override
@@ -230,6 +243,8 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
 
     private io.vertx.core.Future<SubmitResult> executeIndividualSubmitWithConnection(SubmitArgument argument, SqlConnection connection, List<Object[]> batchIndexGeneratedKeys) {
+        // Register this SQL execution in the monitor (statement + cancel handle); deregister on completion.
+        long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection));
         // We get a prepared query from the connection
         PreparedQuery<RowSet<Row>> preparedQuery = connection
             .preparedQuery(argument.getStatement()); // statement can be insert, update or delete
@@ -256,6 +271,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // Waiting for the completion of the previous query execution
         long t0 = System.currentTimeMillis();
         return queryExecutionFuture
+            .onComplete(ar -> SqlExecutionMonitor.get().onEnd(monId))
             .onFailure(e -> log("⛔️ ERROR with executeIndividualSubmitWithConnection(" + argument + "): " + e.getMessage()))
             .map(rs -> { // on success, returns rs as a Vert.x RowSet<Row>
                 if (LOG_TIMINGS) {

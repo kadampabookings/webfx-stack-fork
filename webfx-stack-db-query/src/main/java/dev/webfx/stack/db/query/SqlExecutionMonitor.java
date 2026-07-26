@@ -2,6 +2,12 @@ package dev.webfx.stack.db.query;
 
 import dev.webfx.platform.async.util.AsyncQueue;
 
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+
 /**
  * Process-wide monitoring of local SQL execution — reads (queries / SELECT) and writes
  * (submits / INSERT-UPDATE-DELETE) tracked separately — for the /monitor page.
@@ -58,18 +64,102 @@ public final class SqlExecutionMonitor {
             c.errorCount++;
     }
 
-    /** Immutable snapshot of both kinds. Queue depths are read live from the AsyncQueues. */
+    // ── In-flight registry + per-statement rollup (drives the /monitor drill-down and,
+    //    via the stored cancel handle, a future query-cancellation feature) ──────────────
+
+    /** Default number of top statements returned by {@link #snapshot()}. */
+    public static final int DEFAULT_TOP_STATEMENTS = 20;
+
+    /** Cap on distinct statements tracked; past this, the smallest-total entry is evicted. */
+    private static final int MAX_TRACKED_STATEMENTS = 256;
+
+    private long idSeq;
+    private final Map<Long, InFlight> inFlight = new HashMap<>();
+    private final Map<String, StatementStat> statementStats = new HashMap<>();
+
+    /**
+     * Registers a starting SQL execution and returns its monitor id. The {@code cancelHandle} is
+     * stored opaquely (only the executor knows its real type — a Vert.x {@code PgConnection}) for
+     * a future cancellation feature; pass null when none is available.
+     */
+    public synchronized long onStart(Kind kind, String statement, Object cancelHandle) {
+        long id = ++idSeq;
+        inFlight.put(id, new InFlight(id, kind, statement, System.nanoTime(), cancelHandle));
+        return id;
+    }
+
+    /** Marks a SQL execution finished: drops it from in-flight and rolls its time into the per-statement stats. */
+    public synchronized void onEnd(long id) {
+        InFlight f = inFlight.remove(id);
+        if (f == null)
+            return;
+        long nanos = System.nanoTime() - f.startNanos;
+        StatementStat stat = statementStats.get(f.statement);
+        if (stat == null) {
+            if (statementStats.size() >= MAX_TRACKED_STATEMENTS)
+                evictSmallestStatement();
+            statementStats.put(f.statement, stat = new StatementStat(f.kind));
+        }
+        stat.count++;
+        stat.totalNanos += nanos;
+        if (nanos > stat.maxNanos)
+            stat.maxNanos = nanos;
+    }
+
+    /** Returns the opaque cancel handle for an in-flight query, or null if it already finished. */
+    public synchronized Object cancelHandleOf(long id) {
+        InFlight f = inFlight.get(id);
+        return f == null ? null : f.cancelHandle;
+    }
+
+    private void evictSmallestStatement() {
+        String smallest = null;
+        long min = Long.MAX_VALUE;
+        for (Map.Entry<String, StatementStat> e : statementStats.entrySet()) {
+            if (e.getValue().totalNanos < min) {
+                min = e.getValue().totalNanos;
+                smallest = e.getKey();
+            }
+        }
+        if (smallest != null)
+            statementStats.remove(smallest);
+    }
+
+    /** Immutable snapshot with the default top-statements count. */
     public Snapshot snapshot() {
-        // Counters read under this monitor's lock; queue depths read via the queues' own locks
-        // (outside this lock — there is no reverse lock ordering, but keeping the scope minimal
-        // avoids holding two locks at once).
+        return snapshot(DEFAULT_TOP_STATEMENTS);
+    }
+
+    /**
+     * Immutable snapshot of both kinds, plus the top-N statements by total time and the
+     * currently in-flight queries. Queue depths are read live from the AsyncQueues.
+     */
+    public Snapshot snapshot(int topStatements) {
+        // Counters + registry read under this monitor's lock; queue depths read via the queues'
+        // own locks (outside this lock — no reverse lock ordering, but keeps the scope minimal).
         long rc, rt, re, wc, wt, we;
         AsyncQueue rq, wq;
+        List<StatementSnapshot> statements;
+        List<InFlightSnapshot> flights;
         synchronized (this) {
             rc = read.count;  rt = read.totalNanos;  re = read.errorCount;  rq = read.queue;
             wc = write.count; wt = write.totalNanos; we = write.errorCount; wq = write.queue;
+            long nowNanos = System.nanoTime();
+            flights = new ArrayList<>(inFlight.size());
+            for (InFlight f : inFlight.values()) {
+                flights.add(new InFlightSnapshot(f.id, f.kind, f.statement, (nowNanos - f.startNanos) / 1_000_000L));
+            }
+            List<Map.Entry<String, StatementStat>> entries = new ArrayList<>(statementStats.entrySet());
+            entries.sort(Comparator.comparingLong((Map.Entry<String, StatementStat> e) -> e.getValue().totalNanos).reversed());
+            int limit = Math.min(Math.max(0, topStatements), entries.size());
+            statements = new ArrayList<>(limit);
+            for (int i = 0; i < limit; i++) {
+                Map.Entry<String, StatementStat> e = entries.get(i);
+                StatementStat s = e.getValue();
+                statements.add(new StatementSnapshot(e.getKey(), s.kind, s.count, s.totalNanos, s.maxNanos));
+            }
         }
-        return new Snapshot(kindSnapshot(rc, rt, re, rq), kindSnapshot(wc, wt, we, wq));
+        return new Snapshot(kindSnapshot(rc, rt, re, rq), kindSnapshot(wc, wt, we, wq), statements, flights);
     }
 
     private static KindSnapshot kindSnapshot(long count, long totalNanos, long errorCount, AsyncQueue q) {
@@ -88,6 +178,35 @@ public final class SqlExecutionMonitor {
         private AsyncQueue queue;
     }
 
+    /** A currently-executing SQL statement, holding the opaque cancel handle (server-only use). */
+    private static final class InFlight {
+        private final long id;
+        private final Kind kind;
+        private final String statement;
+        private final long startNanos;
+        private final Object cancelHandle;
+
+        InFlight(long id, Kind kind, String statement, long startNanos, Object cancelHandle) {
+            this.id = id;
+            this.kind = kind;
+            this.statement = statement;
+            this.startNanos = startNanos;
+            this.cancelHandle = cancelHandle;
+        }
+    }
+
+    /** Mutable per-statement rollup. */
+    private static final class StatementStat {
+        private final Kind kind;
+        private long count;
+        private long totalNanos;
+        private long maxNanos;
+
+        StatementStat(Kind kind) {
+            this.kind = kind;
+        }
+    }
+
     /**
      * Per-kind snapshot: cumulative {@code count}/{@code totalNanos}/{@code errorCount} plus the
      * live queue gauges ({@code waiting}, {@code executing}, {@code maxConcurrency} = pool size,
@@ -96,6 +215,16 @@ public final class SqlExecutionMonitor {
     public record KindSnapshot(long count, long totalNanos, long errorCount,
                                int waiting, int executing, int maxConcurrency, int peakWaiting) {}
 
-    /** Immutable snapshot of read and write execution. */
-    public record Snapshot(KindSnapshot read, KindSnapshot write) {}
+    /**
+     * Per-statement snapshot (ranked by total time). {@code statement} is already parameter-free
+     * ($1, $2 …), so it is the natural rollup key.
+     */
+    public record StatementSnapshot(String statement, Kind kind, long count, long totalNanos, long maxNanos) {}
+
+    /** A currently-executing SQL statement, with how long it has been running. */
+    public record InFlightSnapshot(long id, Kind kind, String statement, long ageMillis) {}
+
+    /** Immutable snapshot of read/write execution, the top statements, and the in-flight queries. */
+    public record Snapshot(KindSnapshot read, KindSnapshot write,
+                           List<StatementSnapshot> topStatements, List<InFlightSnapshot> inFlight) {}
 }
