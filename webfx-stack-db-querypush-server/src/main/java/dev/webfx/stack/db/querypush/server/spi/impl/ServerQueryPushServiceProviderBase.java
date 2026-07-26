@@ -144,6 +144,22 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildCompressionInfo());
     }
 
+    @Override
+    public Boolean cancelSqlQuery(long monitorId) {
+        // Same gate as getMonitorInfo: cancelling a running query is an admin action reserved for
+        // logged-in callers (super-admin gated on the client). A null return makes the buscall
+        // endpoint fail rather than silently no-op for an unauthorized caller.
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId)) {
+            Console.log("[Monitor] cancelSqlQuery denied — no logged-in caller (userId=" + callerUserId + ")");
+            return null;
+        }
+        boolean dispatched = SqlExecutionMonitor.get().cancel(monitorId);
+        Console.log("[Monitor] cancelSqlQuery id=" + monitorId + " → "
+            + (dispatched ? "cancel dispatched" : "not found / already finished"));
+        return dispatched;
+    }
+
     /** Builds the read/write SQL execution DTO (with top statements + in-flight) from the monitor. */
     private static SqlExecutionMonitorInfo buildSqlExecutionInfo() {
         SqlExecutionMonitor.Snapshot s = SqlExecutionMonitor.get().snapshot();

@@ -47,6 +47,13 @@ public class LocalOrRemoteQueryPushServiceProvider implements QueryPushServicePr
         return null;
     }
 
+    @Override
+    public Boolean cancelSqlQuery(long monitorId) {
+        // Client-side provider: cancellation is routed to the server via the dedicated buscall
+        // endpoint (service/querypush/cancelSqlQuery), not through this local API.
+        return null;
+    }
+
     protected QueryPushServiceProvider getOrCreateLocalConnectedProvider(Object dataSourceId) {
         QueryPushServiceProvider localConnectedProvider = LocalQueryPushServiceProviderRegistry.getLocalConnectedProvider(dataSourceId);
         if (localConnectedProvider == null) {

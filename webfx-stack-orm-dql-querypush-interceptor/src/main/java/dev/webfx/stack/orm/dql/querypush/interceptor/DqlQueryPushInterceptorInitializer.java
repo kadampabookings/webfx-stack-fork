@@ -49,6 +49,12 @@ public class DqlQueryPushInterceptorInitializer implements ApplicationJob {
                         // this delegation the call would fall through to the SPI default = null).
                         return targetProvider.getMonitorInfo();
                     }
+
+                    @Override
+                    public Boolean cancelSqlQuery(long monitorId) {
+                        // Delegate cancellation too — this interceptor only touches executeQueryPush.
+                        return targetProvider.cancelSqlQuery(monitorId);
+                    }
                 }
         );
     }

@@ -25,4 +25,16 @@ public interface QueryPushServiceProvider {
      */
     QueryPushMonitorInfo getMonitorInfo();
 
+    /**
+     * Requests best-effort cancellation of an in-flight SQL query by its monitor id (as reported
+     * in {@code getMonitorInfo().sqlExecution.inFlight}). Returns TRUE when a cancel action was
+     * dispatched, FALSE when the id is unknown / already finished / not cancellable, and null when
+     * not available (client-side providers, or a server caller that isn't a logged-in user).
+     * <p>
+     * Like {@link #getMonitorInfo()}, deliberately NOT a defaulted method so decorators must
+     * delegate explicitly. Cancellation is out-of-band and advisory: the query may finish first,
+     * and a cancelled query fails (SQLSTATE 57014) with its transaction rolled back.
+     */
+    Boolean cancelSqlQuery(long monitorId);
+
 }

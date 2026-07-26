@@ -31,4 +31,13 @@ public final class QueryPushService {
         return getProvider().getMonitorInfo();
     }
 
+    /**
+     * Requests best-effort cancellation of an in-flight SQL query by its monitor id (see
+     * {@link QueryPushServiceProvider#cancelSqlQuery(long)}). Returns TRUE if dispatched, FALSE if
+     * unknown / already finished, or null when not available.
+     */
+    public static Boolean cancelSqlQuery(long monitorId) {
+        return getProvider().cancelSqlQuery(monitorId);
+    }
+
 }

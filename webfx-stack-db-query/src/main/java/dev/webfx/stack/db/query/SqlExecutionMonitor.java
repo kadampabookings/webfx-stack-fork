@@ -79,8 +79,9 @@ public final class SqlExecutionMonitor {
 
     /**
      * Registers a starting SQL execution and returns its monitor id. The {@code cancelHandle} is
-     * stored opaquely (only the executor knows its real type — a Vert.x {@code PgConnection}) for
-     * a future cancellation feature; pass null when none is available.
+     * stored opaquely — the executor supplies a client-safe {@link Runnable} cancel action (so this
+     * module stays free of any Vert.x dependency), which {@link #cancel(long)} runs on request;
+     * pass null when none is available.
      */
     public synchronized long onStart(Kind kind, String statement, Object cancelHandle) {
         long id = ++idSeq;
@@ -110,6 +111,26 @@ public final class SqlExecutionMonitor {
     public synchronized Object cancelHandleOf(long id) {
         InFlight f = inFlight.get(id);
         return f == null ? null : f.cancelHandle;
+    }
+
+    /**
+     * Best-effort cancellation of an in-flight query: runs its stored cancel action outside this
+     * monitor's lock (the action may open a network connection — never hold the lock across it).
+     * The executor supplies the handle as a client-safe {@link Runnable}, so this stays free of any
+     * executor / Vert.x dependency. Returns true if an action was found and run, false if the id is
+     * unknown, already finished, or had no cancel handle.
+     */
+    public boolean cancel(long id) {
+        Object handle;
+        synchronized (this) {
+            InFlight f = inFlight.get(id);
+            handle = f == null ? null : f.cancelHandle;
+        }
+        if (handle instanceof Runnable r) {
+            r.run();
+            return true;
+        }
+        return false;
     }
 
     private void evictSmallestStatement() {

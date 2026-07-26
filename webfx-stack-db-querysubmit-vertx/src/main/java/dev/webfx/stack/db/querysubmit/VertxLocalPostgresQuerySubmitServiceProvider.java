@@ -176,10 +176,19 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             });
     }
 
-    /** Best-effort cancel handle for an executing statement: the Vert.x PgConnection (null if not PG). */
-    private static Object pgCancelHandle(SqlConnection connection) {
+    /**
+     * Best-effort cancel action for an executing statement, stored opaquely by the monitor as the
+     * in-flight query's cancel handle. We return a client-safe {@link Runnable} (not the
+     * PgConnection) so the monitor module that triggers cancellation stays free of any Vert.x
+     * pg-client dependency. {@code PgConnection.cancelRequest()} is out-of-band — it opens a fresh
+     * connection and asks PostgreSQL to cancel the query running on this backend; it is advisory
+     * (the query may finish first) and a cancelled query fails with SQLSTATE 57014, completing its
+     * future exceptionally (so {@code onEnd} still runs). Returns null for non-PG connections.
+     */
+    private Runnable pgCancelHandle(SqlConnection connection) {
         try {
-            return io.vertx.pgclient.PgConnection.cast(connection);
+            io.vertx.pgclient.PgConnection pg = io.vertx.pgclient.PgConnection.cast(connection);
+            return () -> pg.cancelRequest().onFailure(t -> log("⚠️ WARNING: query cancelRequest failed: " + t));
         } catch (Throwable t) {
             return null;
         }
