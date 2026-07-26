@@ -5,14 +5,19 @@ import dev.webfx.platform.console.Console;
 import dev.webfx.platform.scheduler.Scheduler;
 import dev.webfx.platform.util.collection.Collections;
 import dev.webfx.stack.db.datascope.DataScope;
+import dev.webfx.stack.db.query.CompressionMetrics;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
+import dev.webfx.stack.db.query.SqlExecutionMonitor;
+import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
+import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
+import dev.webfx.stack.db.querypush.SqlKindMonitorInfo;
 import dev.webfx.stack.db.querypush.diff.QueryResultComparator;
 import dev.webfx.stack.db.querypush.diff.QueryResultDiff;
 import dev.webfx.stack.db.querypush.server.QueryPushServerService;
@@ -129,7 +134,29 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                     queryInfo.lastQueryExecutionTime == 0 ? -1 : now() - queryInfo.lastQueryExecutionTime));
             }
         }
-        return new QueryPushMonitorInfo(PushServerService.getPushClientsCount(), allUserIds.size(), queryStreams.toArray(new QueryStreamMonitorInfo[0]));
+        return new QueryPushMonitorInfo(
+            PushServerService.getPushClientsCount(),
+            allUserIds.size(),
+            queryStreams.toArray(new QueryStreamMonitorInfo[0]),
+            buildSqlExecutionInfo(),
+            buildCompressionInfo());
+    }
+
+    /** Builds the read/write SQL execution DTO from the process-wide {@link SqlExecutionMonitor}. */
+    private static SqlExecutionMonitorInfo buildSqlExecutionInfo() {
+        SqlExecutionMonitor.Snapshot s = SqlExecutionMonitor.get().snapshot();
+        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()));
+    }
+
+    private static SqlKindMonitorInfo toKindInfo(SqlExecutionMonitor.KindSnapshot k) {
+        return new SqlKindMonitorInfo(k.count(), k.totalNanos(), k.errorCount(),
+            k.waiting(), k.executing(), k.maxConcurrency(), k.peakWaiting());
+    }
+
+    /** Builds the compression DTO from the process-wide {@link CompressionMetrics}. */
+    private static CompressionMonitorInfo buildCompressionInfo() {
+        CompressionMetrics.Snapshot c = CompressionMetrics.snapshot();
+        return new CompressionMonitorInfo(c.count(), c.totalNanos(), c.maxNanos(), c.slowCount(), c.totalCells());
     }
 
     public abstract class PulsePass {

@@ -3,8 +3,10 @@ package dev.webfx.stack.db.querypush.buscall.serial;
 import dev.webfx.platform.ast.AstObject;
 import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.stack.com.serial.spi.impl.SerialCodecBase;
+import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
+import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
 
 public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<QueryPushMonitorInfo> {
 
@@ -12,6 +14,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String PUSH_CLIENTS_COUNT_KEY = "pushClientsCount";
     private static final String SUBSCRIBED_USERS_COUNT_KEY = "subscribedUsersCount";
     private static final String QUERY_STREAMS_KEY = "queryStreams";
+    private static final String SQL_EXECUTION_KEY = "sqlExecution";
+    private static final String COMPRESSION_KEY = "compression";
 
     public QueryPushMonitorInfoSerialCodec() {
         super(QueryPushMonitorInfo.class, CODEC_ID);
@@ -22,6 +26,9 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         encodeInteger(serial, PUSH_CLIENTS_COUNT_KEY,     arg.getPushClientsCount());
         encodeInteger(serial, SUBSCRIBED_USERS_COUNT_KEY, arg.getSubscribedUsersCount());
         encodeArray(  serial, QUERY_STREAMS_KEY,          arg.getQueryStreams());
+        // Null on older servers — encodeObject skips nulls, decodeObject returns null.
+        encodeObject( serial, SQL_EXECUTION_KEY,          arg.getSqlExecution());
+        encodeObject( serial, COMPRESSION_KEY,            arg.getCompression());
     }
 
     @Override
@@ -29,7 +36,9 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         return new QueryPushMonitorInfo(
                 decodeInteger(serial, PUSH_CLIENTS_COUNT_KEY, 0),
                 decodeInteger(serial, SUBSCRIBED_USERS_COUNT_KEY, 0),
-                decodeArray(  serial, QUERY_STREAMS_KEY, QueryStreamMonitorInfo.class)
+                decodeArray(  serial, QUERY_STREAMS_KEY, QueryStreamMonitorInfo.class),
+                (SqlExecutionMonitorInfo) decodeObject(serial, SQL_EXECUTION_KEY),
+                (CompressionMonitorInfo) decodeObject(serial, COMPRESSION_KEY)
         );
     }
 

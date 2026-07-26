@@ -1,10 +1,11 @@
 package dev.webfx.stack.db.querypush;
 
 /**
- * Read-only monitoring snapshot of the query-push server state, as returned by
- * {@link QueryPushService#getMonitorInfo()}: how many clients the push server is currently
- * serving, and the list of push queries with their subscription details. Meant for display
- * in an administration console.
+ * Read-only monitoring snapshot of the server for the /monitor page, as returned by
+ * {@link QueryPushService#getMonitorInfo()}: the query-push state (connected clients + the list
+ * of push queries with their subscription details), plus database execution metrics
+ * ({@link SqlExecutionMonitorInfo}) and QueryResult compression metrics
+ * ({@link CompressionMonitorInfo}). Meant for display in an administration console.
  *
  * @author Bruno Salmon
  */
@@ -13,11 +14,16 @@ public final class QueryPushMonitorInfo {
     private final int pushClientsCount; // clients (~ browser tabs) currently registered on the push server
     private final int subscribedUsersCount; // distinct logged-in users holding at least one query-push subscription
     private final QueryStreamMonitorInfo[] queryStreams;
+    private final SqlExecutionMonitorInfo sqlExecution; // read/write SQL execution metrics (may be null on older servers)
+    private final CompressionMonitorInfo compression;   // QueryResult compression metrics (may be null on older servers)
 
-    public QueryPushMonitorInfo(int pushClientsCount, int subscribedUsersCount, QueryStreamMonitorInfo[] queryStreams) {
+    public QueryPushMonitorInfo(int pushClientsCount, int subscribedUsersCount, QueryStreamMonitorInfo[] queryStreams,
+                                SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression) {
         this.pushClientsCount = pushClientsCount;
         this.subscribedUsersCount = subscribedUsersCount;
         this.queryStreams = queryStreams;
+        this.sqlExecution = sqlExecution;
+        this.compression = compression;
     }
 
     public int getPushClientsCount() {
@@ -30,5 +36,13 @@ public final class QueryPushMonitorInfo {
 
     public QueryStreamMonitorInfo[] getQueryStreams() {
         return queryStreams;
+    }
+
+    public SqlExecutionMonitorInfo getSqlExecution() {
+        return sqlExecution;
+    }
+
+    public CompressionMonitorInfo getCompression() {
+        return compression;
     }
 }

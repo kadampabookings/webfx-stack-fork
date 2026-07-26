@@ -10,6 +10,7 @@ import dev.webfx.stack.db.datasource.ConnectionDetails;
 import dev.webfx.stack.db.datasource.LocalDataSource;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
+import dev.webfx.stack.db.query.SqlExecutionMonitor;
 import dev.webfx.stack.db.query.spi.QueryServiceProvider;
 import dev.webfx.stack.db.submit.GeneratedKeyReference;
 import dev.webfx.stack.db.submit.SubmitArgument;
@@ -47,11 +48,16 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     private final AsyncQueue asyncQueue;
     private final Pool pool;
+    private final SqlExecutionMonitor.Kind monitorKind; // READ for queries, WRITE for submits
 
     public VertxLocalPostgresQuerySubmitServiceProvider(LocalDataSource localDataSource, boolean submit) {
         int poolSize = submit ? SUBMIT_POOL_SIZE : QUERY_POOL_SIZE;
         asyncQueue = new AsyncQueue(poolSize, "POSTGRES-" + (submit ? "SUBMIT" : "QUERY"))
             .setExecutionTimeout(SQL_OPERATION_TIMEOUT_MILLIS);
+        // Register this queue for /monitor so the snapshot can read its live depth, and remember
+        // the kind so completed operations are counted as reads (queries) or writes (submits).
+        monitorKind = submit ? SqlExecutionMonitor.Kind.WRITE : SqlExecutionMonitor.Kind.READ;
+        SqlExecutionMonitor.get().registerQueue(monitorKind, asyncQueue);
 
         ConnectionDetails cd = localDataSource.getLocalConnectionDetails();
         PgConnectOptions connectOptions = new PgConnectOptions()
@@ -113,6 +119,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     private Future<QueryResult> executeQueryNow(QueryArgument argument) {
         long t0 = System.currentTimeMillis();
+        long t0n = System.nanoTime();
         return toWebfxFuture(withConnection(pool, connection -> executeConnectionQuery(connection, argument)))
             .onFailure(e -> log("⛔️ ERROR with executeQuery(" + argument + "): " + e.getMessage()))
             .onSuccess(x -> { // Just for time report
@@ -120,7 +127,8 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                     long executionTimeMillis = System.currentTimeMillis() - t0;
                     log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Query executed in " + executionTimeMillis + "ms: " + argument);
                 }
-            });
+            })
+            .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
     }
 
     @Override
@@ -136,6 +144,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     private Future<Batch<QueryResult>> executeQueryBatchNow(Batch<QueryArgument> batch) {
         long t0 = System.currentTimeMillis();
+        long t0n = System.nanoTime();
         return toWebfxFuture(withConnection(pool, connection ->
             toVertxFuture(batch.executeSerial(QueryResult[]::new, arg ->
                 toWebfxFuture(executeConnectionQuery(connection, arg))))
@@ -146,7 +155,8 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                     long executionTimeMillis = System.currentTimeMillis() - t0;
                     log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Query batch executed in " + executionTimeMillis + "ms");
                 }
-            });
+            })
+            .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
     }
 
     private io.vertx.core.Future<QueryResult> executeConnectionQuery(SqlConnection connection, QueryArgument argument) {
@@ -171,7 +181,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     private Future<SubmitResult> executeSubmitNow(SubmitArgument argument) {
         // Note: executeIndividualSubmitWithConnection() already logs failure and timing
-        return toWebfxFuture(withConnection(pool, connection -> executeIndividualSubmitWithConnection(argument, connection, null)));
+        long t0n = System.nanoTime();
+        return toWebfxFuture(withConnection(pool, connection -> executeIndividualSubmitWithConnection(argument, connection, null)))
+            .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
     }
 
     @Override
@@ -190,6 +202,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // SubmitArgument, index 1 from the second, etc...)
         List<Object[]> batchIndexGeneratedKeys = new ArrayList<>(batch.getArray().length);
         long t0 = System.currentTimeMillis();
+        long t0n = System.nanoTime();
         // We embed the batch execution inside a transaction using Vert.x API (and convert the return Vert.x Future<SubmitResult> into WebFX Future<SubmitResult>)
         return toWebfxFuture(withTransaction(pool, connection ->
             // We execute the batch in a serial order (we need a couple of Vert.x <-> WebFX Future for that)
@@ -208,7 +221,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                 log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Submit batch executed in " + executionTimeMillis + "ms");
             }
             onSuccessfulSubmitBatch(batch);
-        });
+        }).onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
     }
 
     private static void onSuccessfulSubmitBatch(Batch<SubmitArgument> batch) {
