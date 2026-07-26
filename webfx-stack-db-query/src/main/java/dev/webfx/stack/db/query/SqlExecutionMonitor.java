@@ -114,6 +114,24 @@ public final class SqlExecutionMonitor {
     }
 
     /**
+     * Whether {@code statement} is a read (query/SELECT) statement this monitor has seen — i.e. it
+     * is in the per-statement rollup or currently in-flight as a READ. Used to gate "analyze this
+     * statement" requests to statements the server actually runs, so an admin can never arm analysis
+     * of arbitrary client-supplied SQL.
+     */
+    public synchronized boolean isKnownReadStatement(String statement) {
+        if (statement == null)
+            return false;
+        StatementStat stat = statementStats.get(statement);
+        if (stat != null)
+            return stat.kind == Kind.READ;
+        for (InFlight f : inFlight.values())
+            if (f.kind == Kind.READ && statement.equals(f.statement))
+                return true;
+        return false;
+    }
+
+    /**
      * Best-effort cancellation of an in-flight query: runs its stored cancel action outside this
      * monitor's lock (the action may open a network connection — never hold the lock across it).
      * The executor supplies the handle as a client-safe {@link Runnable}, so this stays free of any

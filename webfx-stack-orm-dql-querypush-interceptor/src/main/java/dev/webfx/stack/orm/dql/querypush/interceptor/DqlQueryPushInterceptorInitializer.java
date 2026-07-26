@@ -12,6 +12,7 @@ import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
+import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.orm.domainmodel.DataSourceModel;
@@ -54,6 +55,16 @@ public class DqlQueryPushInterceptorInitializer implements ApplicationJob {
                     public Boolean cancelSqlQuery(long monitorId) {
                         // Delegate cancellation too — this interceptor only touches executeQueryPush.
                         return targetProvider.cancelSqlQuery(monitorId);
+                    }
+
+                    @Override
+                    public Boolean armSqlAnalyze(String statement) {
+                        return targetProvider.armSqlAnalyze(statement);
+                    }
+
+                    @Override
+                    public SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement) {
+                        return targetProvider.getSqlAnalyzeResult(statement);
                     }
                 }
         );

@@ -40,4 +40,20 @@ public final class QueryPushService {
         return getProvider().cancelSqlQuery(monitorId);
     }
 
+    /**
+     * Arms a read statement for analyze-on-next-occurrence (see
+     * {@link QueryPushServiceProvider#armSqlAnalyze(String)}).
+     */
+    public static Boolean armSqlAnalyze(String statement) {
+        return getProvider().armSqlAnalyze(statement);
+    }
+
+    /**
+     * Returns the current analyze state for a statement (see
+     * {@link QueryPushServiceProvider#getSqlAnalyzeResult(String)}).
+     */
+    public static SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement) {
+        return getProvider().getSqlAnalyzeResult(statement);
+    }
+
 }

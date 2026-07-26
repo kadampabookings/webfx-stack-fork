@@ -8,6 +8,7 @@ import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
+import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
 import dev.webfx.stack.db.querypush.buscall.QueryPushServiceBusAddress;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.db.querypush.spi.impl.LocalQueryPushServiceProviderRegistry;
@@ -51,6 +52,20 @@ public class LocalOrRemoteQueryPushServiceProvider implements QueryPushServicePr
     public Boolean cancelSqlQuery(long monitorId) {
         // Client-side provider: cancellation is routed to the server via the dedicated buscall
         // endpoint (service/querypush/cancelSqlQuery), not through this local API.
+        return null;
+    }
+
+    @Override
+    public Boolean armSqlAnalyze(String statement) {
+        // Client-side provider: analyze is routed to the server via the dedicated buscall endpoint
+        // (service/querypush/armSqlAnalyze), not through this local API.
+        return null;
+    }
+
+    @Override
+    public SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement) {
+        // Client-side provider: analyze results are fetched from the server via the dedicated
+        // buscall endpoint (service/querypush/getSqlAnalyzeResult), not through this local API.
         return null;
     }
 

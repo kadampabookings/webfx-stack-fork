@@ -10,6 +10,7 @@ import dev.webfx.stack.db.datasource.ConnectionDetails;
 import dev.webfx.stack.db.datasource.LocalDataSource;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
+import dev.webfx.stack.db.query.SqlAnalyzeRegistry;
 import dev.webfx.stack.db.query.SqlExecutionMonitor;
 import dev.webfx.stack.db.query.spi.QueryServiceProvider;
 import dev.webfx.stack.db.submit.GeneratedKeyReference;
@@ -163,6 +164,10 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // Register this actual SQL execution in the monitor (statement + cancel handle), for the
         // /monitor in-flight list + per-statement rollup; deregister on completion.
         long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection));
+        // If an admin armed this statement for analyze, capture its real params and EXPLAIN it
+        // (separate connection — the real query below is untouched). Reads only, by construction:
+        // this is the query path (monitorKind == READ); the submit path never analyzes.
+        maybeAnalyzeQuery(argument);
         return connection
             .preparedQuery(argument.getStatement())
             .execute(tupleFromArguments(argument.getParameters()))
@@ -173,6 +178,40 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                 // multiple fires from the same source race on the network.
                 result.setCallSeq(argument.getCallSeq());
                 return result;
+            });
+    }
+
+    /**
+     * If {@code argument}'s statement was armed for analysis (via {@link SqlAnalyzeRegistry}), run
+     * {@code EXPLAIN (ANALYZE, BUFFERS)} on it with these real parameters on a fresh pool connection
+     * and store the plan for the /monitor poll to collect. Fire-and-forget: it never affects the
+     * real query. {@code EXPLAIN ANALYZE} executes the query, but this path is reads-only so it has
+     * no side effects (one extra run of the query, admin-initiated and one-shot). The statement is
+     * the server's own — the arm only matches statements the server actually runs — so this never
+     * runs arbitrary SQL.
+     */
+    private void maybeAnalyzeQuery(QueryArgument argument) {
+        SqlAnalyzeRegistry registry = SqlAnalyzeRegistry.get();
+        if (!registry.hasArmed()) // hot-path guard: no map lookup when nothing is armed
+            return;
+        String statement = argument.getStatement();
+        if (!registry.claimIfArmed(statement, System.currentTimeMillis()))
+            return;
+        Object[] parameters = argument.getParameters();
+        String parametersDisplay = parameters == null || parameters.length == 0 ? null : java.util.Arrays.toString(parameters);
+        withConnection(pool, c -> c.preparedQuery("EXPLAIN (ANALYZE, BUFFERS) " + statement).execute(tupleFromArguments(parameters)))
+            .onComplete(ar -> {
+                String plan;
+                if (ar.succeeded()) {
+                    StringBuilder sb = new StringBuilder();
+                    for (Row row : ar.result())
+                        sb.append(row.getString(0)).append('\n');
+                    plan = sb.toString();
+                } else {
+                    plan = "EXPLAIN failed: " + ar.cause();
+                    log("⚠️ WARNING: analyze EXPLAIN failed for statement: " + statement + " — " + ar.cause());
+                }
+                registry.storeResult(statement, parametersDisplay, plan, System.currentTimeMillis());
             });
     }
 

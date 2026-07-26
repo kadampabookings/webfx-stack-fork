@@ -3,6 +3,7 @@ package dev.webfx.stack.db.querypush.spi;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
+import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
 import dev.webfx.platform.async.Future;
 
 /**
@@ -36,5 +37,24 @@ public interface QueryPushServiceProvider {
      * and a cancelled query fails (SQLSTATE 57014) with its transaction rolled back.
      */
     Boolean cancelSqlQuery(long monitorId);
+
+    /**
+     * Arms a tracked read statement for "analyze on next occurrence": the next time the server runs
+     * that exact statement it captures the real parameters and EXPLAINs it (see
+     * {@link #getSqlAnalyzeResult(String)}). Returns TRUE when armed, FALSE when the statement isn't
+     * a known read statement (so arbitrary SQL can't be armed), and null when not available
+     * (client-side providers, or a caller that isn't a logged-in user).
+     * <p>
+     * Deliberately NOT defaulted (like {@link #getMonitorInfo()}) so decorators must delegate.
+     */
+    Boolean armSqlAnalyze(String statement);
+
+    /**
+     * Returns the current analyze state for a statement (pending / ready-with-plan / none), or null
+     * when not available (client-side providers, or a caller that isn't a logged-in user).
+     * <p>
+     * Deliberately NOT defaulted (like {@link #getMonitorInfo()}) so decorators must delegate.
+     */
+    SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement);
 
 }

@@ -9,6 +9,7 @@ import dev.webfx.stack.db.query.CompressionMetrics;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
+import dev.webfx.stack.db.query.SqlAnalyzeRegistry;
 import dev.webfx.stack.db.query.SqlExecutionMonitor;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
@@ -17,6 +18,7 @@ import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
+import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlKindMonitorInfo;
 import dev.webfx.stack.db.querypush.StatementMonitorInfo;
@@ -158,6 +160,42 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         Console.log("[Monitor] cancelSqlQuery id=" + monitorId + " → "
             + (dispatched ? "cancel dispatched" : "not found / already finished"));
         return dispatched;
+    }
+
+    @Override
+    public Boolean armSqlAnalyze(String statement) {
+        // Same gate as getMonitorInfo. Reserved for logged-in callers; a null return fails the call.
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId)) {
+            Console.log("[Monitor] armSqlAnalyze denied — no logged-in caller (userId=" + callerUserId + ")");
+            return null;
+        }
+        // Only arm statements the server actually runs as reads — never arbitrary client SQL, and
+        // never a write (EXPLAIN ANALYZE would execute it).
+        if (!SqlExecutionMonitor.get().isKnownReadStatement(statement)) {
+            Console.log("[Monitor] armSqlAnalyze rejected — not a known read statement");
+            return false;
+        }
+        SqlAnalyzeRegistry.get().arm(statement, System.currentTimeMillis(), SqlAnalyzeRegistry.DEFAULT_ARM_TTL_MILLIS);
+        Console.log("[Monitor] armSqlAnalyze armed a read statement for next-occurrence EXPLAIN");
+        return true;
+    }
+
+    @Override
+    public SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement) {
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId))
+            return null;
+        long now = System.currentTimeMillis();
+        SqlAnalyzeRegistry.Result r = SqlAnalyzeRegistry.get().getResult(statement, now);
+        switch (r.status) {
+            case READY:
+                return new SqlAnalyzeResultInfo("ready", r.planText, r.parametersDisplay, Math.max(0, now - r.atMillis));
+            case PENDING:
+                return new SqlAnalyzeResultInfo("pending", null, null, -1);
+            default:
+                return new SqlAnalyzeResultInfo("none", null, null, -1);
+        }
     }
 
     /** Builds the read/write SQL execution DTO (with top statements + in-flight) from the monitor. */
