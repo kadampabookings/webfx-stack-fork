@@ -7,8 +7,9 @@ package dev.webfx.stack.db.querypush;
  * {@code status} is {@code "pending"} while waiting for the next occurrence (or capturing the plan),
  * {@code "ready"} once the plan is captured, and {@code "none"} when nothing is armed/captured for
  * the statement (or the arm expired). When ready, {@code plan} holds the {@code EXPLAIN (ANALYZE,
- * BUFFERS)} text, {@code parameters} the real parameters it used, and {@code capturedAgeMillis} the
- * time since capture; otherwise those are null / -1.
+ * BUFFERS)} text, {@code dql} the original DQL the SQL was compiled from (null when not DQL-derived),
+ * {@code parameters} the real parameters it used, and {@code capturedAgeMillis} the time since
+ * capture; otherwise those are null / -1.
  *
  * @author Bruno Salmon
  */
@@ -16,18 +17,21 @@ public final class SqlAnalyzeResultInfo {
 
     private final String status;            // "pending" | "ready" | "none"
     private final String plan;              // EXPLAIN output, non-null only when ready
+    private final String dql;               // original DQL, null unless ready and DQL-derived
     private final String parameters;        // display of the captured parameters, may be null
     private final long capturedAgeMillis;   // ms since capture when ready, else -1
 
-    public SqlAnalyzeResultInfo(String status, String plan, String parameters, long capturedAgeMillis) {
+    public SqlAnalyzeResultInfo(String status, String plan, String dql, String parameters, long capturedAgeMillis) {
         this.status = status;
         this.plan = plan;
+        this.dql = dql;
         this.parameters = parameters;
         this.capturedAgeMillis = capturedAgeMillis;
     }
 
     public String getStatus() { return status; }
     public String getPlan() { return plan; }
+    public String getDql() { return dql; }
     public String getParameters() { return parameters; }
     public long getCapturedAgeMillis() { return capturedAgeMillis; }
 }

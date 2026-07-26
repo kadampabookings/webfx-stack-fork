@@ -199,6 +199,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             return;
         Object[] parameters = argument.getParameters();
         String parametersDisplay = parameters == null || parameters.length == 0 ? null : java.util.Arrays.toString(parameters);
+        // The original DQL this SQL was compiled from (server-side only, via the transient
+        // original-argument chain the DQL interceptor sets); null when the query wasn't DQL-derived.
+        String dql = dqlStatementOf(argument);
         withConnection(pool, c -> c.preparedQuery("EXPLAIN (ANALYZE, BUFFERS) " + statement).execute(tupleFromArguments(parameters)))
             .onComplete(ar -> {
                 String plan;
@@ -211,8 +214,17 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                     plan = "EXPLAIN failed: " + ar.cause();
                     log("⚠️ WARNING: analyze EXPLAIN failed for statement: " + statement + " — " + ar.cause());
                 }
-                registry.storeResult(statement, parametersDisplay, plan, System.currentTimeMillis());
+                registry.storeResult(statement, dql, parametersDisplay, plan, System.currentTimeMillis());
             });
+    }
+
+    /** Walks the argument's original-argument chain to the DQL statement it was compiled from, or null. */
+    private static String dqlStatementOf(QueryArgument argument) {
+        if (argument == null)
+            return null;
+        if ("DQL".equalsIgnoreCase(argument.getLanguage()))
+            return argument.getStatement();
+        return dqlStatementOf(argument.getOriginalArgument());
     }
 
     /**

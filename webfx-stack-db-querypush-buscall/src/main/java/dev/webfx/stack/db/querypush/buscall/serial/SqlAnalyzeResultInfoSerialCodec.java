@@ -10,6 +10,7 @@ public final class SqlAnalyzeResultInfoSerialCodec extends SerialCodecBase<SqlAn
     private static final String CODEC_ID = "SqlAnalyzeResultInfo";
     private static final String STATUS_KEY = "status";
     private static final String PLAN_KEY = "plan";
+    private static final String DQL_KEY = "dql";
     private static final String PARAMETERS_KEY = "parameters";
     private static final String CAPTURED_AGE_MILLIS_KEY = "capturedAgeMillis";
 
@@ -21,6 +22,7 @@ public final class SqlAnalyzeResultInfoSerialCodec extends SerialCodecBase<SqlAn
     public void encode(SqlAnalyzeResultInfo arg, AstObject serial) {
         encodeString(serial, STATUS_KEY,              arg.getStatus());
         encodeString(serial, PLAN_KEY,                arg.getPlan());
+        encodeString(serial, DQL_KEY,                 arg.getDql());
         encodeString(serial, PARAMETERS_KEY,          arg.getParameters());
         encodeLong(  serial, CAPTURED_AGE_MILLIS_KEY, arg.getCapturedAgeMillis());
     }
@@ -30,6 +32,7 @@ public final class SqlAnalyzeResultInfoSerialCodec extends SerialCodecBase<SqlAn
         return new SqlAnalyzeResultInfo(
             decodeString(serial, STATUS_KEY),
             decodeString(serial, PLAN_KEY),
+            decodeString(serial, DQL_KEY),
             decodeString(serial, PARAMETERS_KEY),
             orMinusOne(decodeLong(serial, CAPTURED_AGE_MILLIS_KEY)));
     }

@@ -65,15 +65,18 @@ public final class SqlAnalyzeRegistry {
         armedCount = armedExpiry.size();
         if (expiry == null || expiry < nowMillis)
             return false; // not armed, or expired — don't capture
-        results.put(statement, new Result(Status.PENDING, null, null, nowMillis));
+        results.put(statement, new Result(Status.PENDING, null, null, null, nowMillis));
         return true;
     }
 
-    /** Stores the captured EXPLAIN plan (and the parameters used) for a claimed statement. */
-    public synchronized void storeResult(String statement, String parametersDisplay, String planText, long nowMillis) {
+    /**
+     * Stores the captured EXPLAIN plan for a claimed statement, along with the parameters used and
+     * the original DQL statement it was compiled from (null when the SQL wasn't DQL-derived).
+     */
+    public synchronized void storeResult(String statement, String dqlStatement, String parametersDisplay, String planText, long nowMillis) {
         if (results.size() >= MAX_RESULTS && !results.containsKey(statement))
             evictOldest();
-        results.put(statement, new Result(Status.READY, parametersDisplay, planText, nowMillis));
+        results.put(statement, new Result(Status.READY, dqlStatement, parametersDisplay, planText, nowMillis));
     }
 
     /** Current analyze state for a statement: READY (plan), PENDING (armed/capturing) or NONE. */
@@ -89,7 +92,7 @@ public final class SqlAnalyzeRegistry {
             armedCount = armedExpiry.size();
             return NONE;
         }
-        return new Result(Status.PENDING, null, null, expiry);
+        return new Result(Status.PENDING, null, null, null, expiry);
     }
 
     private void evictOldest() {
@@ -104,21 +107,24 @@ public final class SqlAnalyzeRegistry {
             results.remove(oldest);
     }
 
-    private static final Result NONE = new Result(Status.NONE, null, null, 0);
+    private static final Result NONE = new Result(Status.NONE, null, null, null, 0);
 
     /**
      * Immutable analyze state. PENDING while waiting for the next occurrence or capturing the plan;
-     * READY carries {@code planText} + the {@code parametersDisplay} used and {@code atMillis} = the
-     * capture time. NONE means nothing armed/captured (or the arm expired).
+     * READY carries {@code planText}, the {@code parametersDisplay} used, the {@code dqlStatement}
+     * the SQL was compiled from (null when not DQL-derived) and {@code atMillis} = the capture time.
+     * NONE means nothing armed/captured (or the arm expired).
      */
     public static final class Result {
         public final Status status;
+        public final String dqlStatement;      // original DQL, null unless READY and DQL-derived
         public final String parametersDisplay; // null unless READY
         public final String planText;          // null unless READY
         public final long atMillis;            // capture time (READY) — for age + oldest-eviction
 
-        Result(Status status, String parametersDisplay, String planText, long atMillis) {
+        Result(Status status, String dqlStatement, String parametersDisplay, String planText, long atMillis) {
             this.status = status;
+            this.dqlStatement = dqlStatement;
             this.parametersDisplay = parametersDisplay;
             this.planText = planText;
             this.atMillis = atMillis;
