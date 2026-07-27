@@ -121,7 +121,9 @@ public final class ExpressionSqlCompiler {
         // Every branch is compiled with the SAME flags so they all emit the same column list
         // (readForeignFields in particular expands foreign display fields into extra columns);
         // the first branch's query mapping then applies to every row of the union result.
-        SqlCompiled firstCompiled = compileSelect(union.getFirstSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+        // The first branch's SqlBuild is kept because a union-level order by resolves against it.
+        SqlBuild firstBuild = buildSelect(union.getFirstSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, null, null, modelReader);
+        SqlCompiled firstCompiled = firstBuild.toSqlCompiled(); // freezes the first branch's SQL
         // Branches are parenthesized so a per-branch order by/limit/offset remains valid SQL
         StringBuilder sql = new StringBuilder("(").append(firstCompiled.getSql()).append(')');
         List<String> allParamNames = new ArrayList<>(firstCompiled.getParameterNames());
@@ -139,8 +141,64 @@ public final class ExpressionSqlCompiler {
                     allParamNames.add(param);
             cacheable &= branchCompiled.isCacheable();
         }
+        if (union.getOrderBy() != null)
+            compileUnionOrderBy(union.getOrderBy(), firstBuild, sql.append(" order by "), modelReader);
         return new SqlCompiled(sql.toString(), null, allParamNames, true,
                 null, firstCompiled.getQueryMapping(), firstCompiled.getSqlUncompilableCondition(), cacheable);
+    }
+
+    /**
+     * Compiles the union-level order by. SQL restricts a set-operation order by to OUTPUT columns
+     * (names or ordinals) — arbitrary expressions are rejected by Postgres there. So each key is
+     * resolved against the first branch's select columns:
+     * - a key naming a select-list 'as' alias is emitted as that alias (an output column name);
+     * - any other key expression is scratch-compiled in the first branch's context and looked up
+     *   among the first branch's select columns, then emitted as the matching column's ordinal.
+     * A key matching no select column is an error: the caller must add the expression to the
+     * select list of every branch (usually under an 'as' alias) before ordering by it.
+     */
+    private static void compileUnionOrderBy(ExpressionArray<?> orderBy, SqlBuild firstBuild, StringBuilder sql, CompilerDomainModelReader modelReader) {
+        List<String> selectColumns = firstBuild.getSelectColumns();
+        boolean first = true;
+        for (Expression<?> key : orderBy.getExpressions()) {
+            if (!first)
+                sql.append(", ");
+            first = false;
+            Expression<?> operand = key;
+            Ordered<?> ordered = key instanceof Ordered ? (Ordered<?>) key : null;
+            if (ordered != null)
+                operand = ordered.getOperand();
+            if (operand instanceof Alias) { // a select-list 'as' alias reference => an output column name
+                String aliasName = ((Alias<?>) operand).getName();
+                if (selectColumns.stream().noneMatch(column -> column.endsWith(" as " + aliasName)))
+                    throw new IllegalArgumentException("Union-level order by alias '" + aliasName + "' is not a select column alias of the first branch");
+                sql.append(aliasName);
+            } else { // any other expression => must match a select column, emitted as its ordinal
+                String operandSql = firstBuild.compileToScratchSqlText(operand, modelReader);
+                int ordinal = 0;
+                for (int i = 0; i < selectColumns.size(); i++) {
+                    String column = selectColumns.get(i);
+                    // a column may carry an ' as <alias>' suffix on top of the key expression
+                    if (column.equals(operandSql) || column.startsWith(operandSql) && column.substring(operandSql.length()).matches(" as \\w+")) {
+                        ordinal = i + 1;
+                        break;
+                    }
+                }
+                if (ordinal == 0)
+                    throw new IllegalArgumentException("Union-level order by keys must reference selected columns (SQL restriction on set operations) — add '" + operand + "' to the select list of every branch (e.g. under an 'as' alias)");
+                sql.append(ordinal);
+            }
+            if (ordered != null) {
+                if (ordered.isAscending())
+                    sql.append(" asc");
+                else if (ordered.isDescending())
+                    sql.append(" desc");
+                if (ordered.isNullsFirst())
+                    sql.append(" nulls first");
+                else if (ordered.isNullsLast())
+                    sql.append(" nulls last");
+            }
+        }
     }
 
     // Select compilation

@@ -81,9 +81,9 @@ terminal String   STRING, IDENTIFIER;
 
 /* Non terminals used in the grammar section.*/
 non terminal Object                       parser_start;
-non terminal SelectBuilder                select_query, select_start, select_distinct, select_class, select_additional_from, select_where, select_group, select_order, select_limit, select_offset;
+non terminal SelectBuilder                select_query, select_start, select_distinct, select_class, select_additional_from, select_where, select_group, select_order, select_limit, select_offset, union_branch;
 non terminal WithSelectBuilder            with_query, with_cte_list;
-non terminal UnionBuilder                 union_query;
+non terminal UnionBuilder                 union_query, union_core;
 non terminal InsertBuilder                insert_statement, insert_start, insert_class, insert_set;
 non terminal UpdateBuilder                update_statement, update_start, update_class, update_set, update_where;
 non terminal DeleteBuilder                delete_statement, delete_start, delete_class, delete_where;
@@ -460,17 +460,31 @@ select_query    ::= select_offset:select
 
 /* union expression */
 
-/* Each branch is a full select_query, so a branch can carry its own where/order by/limit
-   (compiled parenthesized). A trailing "order by" thus belongs to the LAST BRANCH, not to
-   the union as a whole — union-level ordering is not supported (order client-side instead). */
-union_query     ::= select_query:left UNION select_query:right
+/* SQL-standard shape: a bare branch stops at where/group by — a trailing "order by" after the
+   last branch is the UNION-LEVEL order by (applying to the whole union result). A branch that
+   needs its own order by/limit must be parenthesized: (select ... order by ... limit ...).
+   Union-level order by keys must reference selected columns of the first branch (by repeating
+   the select expression or naming its 'as' alias) — SQL only allows output columns there. */
+union_branch    ::= select_group:select
+                    {: RESULT = select; :}
+                  | LPAREN select_query:select RPAREN
+                    {: RESULT = select; :}
+                  ;
+
+union_core      ::= union_branch:left UNION union_branch:right
                     {: RESULT = new UnionBuilder(left); RESULT.addUnion(right, false); :}
-                  | select_query:left UNION ALL select_query:right
+                  | union_branch:left UNION ALL union_branch:right
                     {: RESULT = new UnionBuilder(left); RESULT.addUnion(right, true); :}
-                  | union_query:union UNION select_query:right
+                  | union_core:union UNION union_branch:right
                     {: RESULT = union; RESULT.addUnion(right, false); :}
-                  | union_query:union UNION ALL select_query:right
+                  | union_core:union UNION ALL union_branch:right
                     {: RESULT = union; RESULT.addUnion(right, true); :}
+                  ;
+
+union_query     ::= union_core:union
+                    {: RESULT = union; :}
+                  | union_core:union ORDER_BY order_list:list
+                    {: RESULT = union; RESULT.orderBy = list; :}
                   ;
 
 /* insert expression */

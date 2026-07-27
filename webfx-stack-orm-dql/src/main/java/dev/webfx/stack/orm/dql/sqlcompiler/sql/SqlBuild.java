@@ -435,6 +435,62 @@ public final class SqlBuild {
         orderedAliases.add(alias);
     }
 
+    /*
+     * Union-level order by support. SQL restricts a set-operation order by to output columns
+     * (names or ordinals), so union order keys are resolved against the first branch's select
+     * columns using the two methods below. Both require this build's SQL to be FROZEN first
+     * (toSql() already called): scratch-compiling a key may register new joins, and freezing
+     * guarantees they cannot leak into the emitted SQL — an unmatched key (e.g. one that would
+     * have needed a new join) is reported as an error by the caller instead.
+     */
+
+    /** Returns this build's select columns as individual SQL texts, in emission order (so ordinal = index + 1). */
+    public List<String> getSelectColumns() {
+        List<String> columns = new ArrayList<>();
+        StringBuilder select = getClauseBuilder(SqlClause.SELECT);
+        if (select == null)
+            return columns;
+        int depth = 0, start = 0;
+        boolean inQuote = false;
+        for (int i = 0; i < select.length(); i++) {
+            char c = select.charAt(i);
+            if (inQuote)
+                inQuote = c != '\''; // '' escape re-enters quote state on the next quote char
+            else if (c == '\'')
+                inQuote = true;
+            else if (c == '(' || c == '[')
+                depth++;
+            else if (c == ')' || c == ']')
+                depth--;
+            else if (c == ',' && depth == 0) {
+                columns.add(select.substring(start, i).trim());
+                start = i + 1;
+            }
+        }
+        if (start < select.length())
+            columns.add(select.substring(start).trim());
+        return columns;
+    }
+
+    /** Compiles an expression into a scratch clause (leaving all real clauses untouched) and returns its SQL text. */
+    public String compileToScratchSqlText(Expression<?> expression, CompilerDomainModelReader modelReader) {
+        // HAVING (not VALUES): addColumnInClause strips the table alias in insert/values/update
+        // clauses, which would make the text never match the select columns (which are qualified)
+        SqlClause scratch = SqlClause.HAVING;
+        StringBuilder origClause = sqlClauseBuilders.get(scratch);
+        sqlClauseBuilders.put(scratch, new StringBuilder());
+        try {
+            dev.webfx.stack.orm.dql.sqlcompiler.ExpressionSqlCompiler.compileExpression(
+                expression, new Options(this, scratch, ", ", false, false, false, modelReader));
+            return sqlClauseBuilders.get(scratch).toString();
+        } finally {
+            if (origClause != null)
+                sqlClauseBuilders.put(scratch, origClause);
+            else
+                sqlClauseBuilders.remove(scratch);
+        }
+    }
+
     public String addJoinCondition(String table1Alias, String column1Name, String table2Alias, String table2Name, String column2Name, boolean leftOuter) {
         SqlBuild logicalAliasBuild = getLogicalAliasBuild(table1Alias);
         if (logicalAliasBuild == null)
