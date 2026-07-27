@@ -21,6 +21,8 @@ public final class BusCallService {
 
     private static final boolean LOGS = false;
     private static final String DEFAULT_BUS_CALL_SERVICE_ADDRESS = "busCallService";
+    // Address of the "is call pending?" endpoint (see registerIsCallPendingEndpoint() below)
+    public static final String IS_CALL_PENDING_ADDRESS = "service/buscall/isCallPending";
 
     public static <T> Future<T> call(String address, Object javaArgument) {
         return call(address, javaArgument, new DeliveryOptions());
@@ -59,16 +61,42 @@ public final class BusCallService {
         return BusCallService.<BusCallArgument, Object> // specifying BusCallArgument parameterized type for the expected as java class reply
             registerJavaHandlerForRemoteCalls( // helper method that does the job to register the java reply handler
             busCallServiceAddress, // the address that receives the BusCallArgument objects
-            (busCallArgument, callerMessage) -> // great, a BusCallArgument has been received
+            (busCallArgument, callerMessage) -> { // great, a BusCallArgument has been received
+                // Registering the call as pending, keyed by the caller runId + call number (both communicated by the
+                // client), so the client can ask - through the "is call pending?" endpoint - if that call is still
+                // being processed (ex: a slow database query) before giving up on a reply exceeding its usual timeout.
+                String callerRunId = ThreadLocalStateHolder.getRunId();
+                int callNumber = busCallArgument.getCallNumber();
+                PendingServerBusCalls.register(callerRunId, callNumber);
                 // Forwarding the target argument to the target address (kind of local call) and waiting for the result
                 sendJavaObjectAndWaitJsonReply(busCallArgument.getTargetAddress(), busCallArgument.getJsonEncodedTargetArgument(), DeliveryOptions.localOnlyDeliveryOptions(callerMessage.state()), ar -> {
+                    // The call is not pending anymore, whatever the outcome (a reply is sent in both cases). Note that
+                    // unregistering and replying happen in the same event loop iteration, so a client probing "is my
+                    // call pending?" can never get "no" while the reply frame is written behind its probe reply.
+                    PendingServerBusCalls.unregister(callerRunId, callNumber);
                     // Wrapping the result into a BusCallResult and sending it back to the initial BusCallService counterpart
                     Message<Object> result = ar.result();
                     if (LOGS)
                         log("Sending result back to client " + busCallArgument.getTargetAddress() + " with result = " + result);
                     sendJavaReply(new BusCallResult(busCallArgument.getCallNumber(), ar.succeeded() ? result.body() : ar.cause()), new DeliveryOptions(), callerMessage);
-                })
+                });
+            }
         );
+    }
+
+    /**
+     * Method for the server to register the "is call pending?" endpoint. It allows a client to ask - passing the call
+     * number of one of its own calls (the caller being identified by the runId of its state, a client can only ever
+     * ask about its own calls, so no access control is required) - if that call is still being processed by the
+     * server (ex: a slow database query still executing). The reply is the age of that pending call in millis, or -1
+     * if that call is not (or no longer) pending. Clients can use this information to extend their reply timeout
+     * instead of raising a final timeout error while the server is actually still working on the call.
+     */
+    public static Registration registerIsCallPendingEndpoint() {
+        return registerBusCallEndpoint(IS_CALL_PENDING_ADDRESS, (Object callNumber) -> {
+            Long ageMillis = PendingServerBusCalls.getPendingCallAgeMillis(ThreadLocalStateHolder.getRunId(), ((Number) callNumber).intValue());
+            return ageMillis == null ? -1L : ageMillis;
+        });
     }
 
 
