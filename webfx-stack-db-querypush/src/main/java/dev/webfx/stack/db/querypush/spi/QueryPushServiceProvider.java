@@ -57,4 +57,14 @@ public interface QueryPushServiceProvider {
      */
     SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement);
 
+    /**
+     * Resets the SQL execution metrics (cumulative counters + per-statement rollup + compression)
+     * so the /monitor page can measure a fresh window. Returns TRUE when reset, and null when not
+     * available (client-side providers, or a caller that isn't a logged-in user). Live state (queues,
+     * in-flight queries) is kept.
+     * <p>
+     * Deliberately NOT defaulted (like {@link #getMonitorInfo()}) so decorators must delegate.
+     */
+    Boolean resetSqlMonitor();
+
 }

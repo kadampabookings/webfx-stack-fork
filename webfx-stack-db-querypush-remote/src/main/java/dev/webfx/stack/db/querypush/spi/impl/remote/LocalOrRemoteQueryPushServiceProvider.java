@@ -69,6 +69,13 @@ public class LocalOrRemoteQueryPushServiceProvider implements QueryPushServicePr
         return null;
     }
 
+    @Override
+    public Boolean resetSqlMonitor() {
+        // Client-side provider: the reset is routed to the server via the dedicated buscall endpoint
+        // (service/querypush/resetSqlMonitor), not through this local API.
+        return null;
+    }
+
     protected QueryPushServiceProvider getOrCreateLocalConnectedProvider(Object dataSourceId) {
         QueryPushServiceProvider localConnectedProvider = LocalQueryPushServiceProviderRegistry.getLocalConnectedProvider(dataSourceId);
         if (localConnectedProvider == null) {

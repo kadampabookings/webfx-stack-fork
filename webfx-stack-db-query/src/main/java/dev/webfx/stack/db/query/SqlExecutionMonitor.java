@@ -64,6 +64,18 @@ public final class SqlExecutionMonitor {
             c.errorCount++;
     }
 
+    /**
+     * Resets the cumulative counters and per-statement rollup so the /monitor page can measure a
+     * fresh window (Clear → run an action → see only what it triggered). Keeps live state: the
+     * registered {@link AsyncQueue}s and the in-flight registry (queries still running) are
+     * untouched; queue high-water marks live on the queues, not here.
+     */
+    public synchronized void reset() {
+        read.count = 0;  read.totalNanos = 0;  read.errorCount = 0;
+        write.count = 0; write.totalNanos = 0; write.errorCount = 0;
+        statementStats.clear();
+    }
+
     // ── In-flight registry + per-statement rollup (drives the /monitor drill-down and,
     //    via the stored cancel handle, a future query-cancellation feature) ──────────────
 

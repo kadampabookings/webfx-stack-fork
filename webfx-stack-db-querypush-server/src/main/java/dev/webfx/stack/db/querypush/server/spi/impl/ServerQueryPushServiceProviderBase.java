@@ -198,6 +198,20 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         }
     }
 
+    @Override
+    public Boolean resetSqlMonitor() {
+        // Same gate as getMonitorInfo. A null return fails the buscall for an unauthorized caller.
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId)) {
+            Console.log("[Monitor] resetSqlMonitor denied — no logged-in caller (userId=" + callerUserId + ")");
+            return null;
+        }
+        SqlExecutionMonitor.get().reset();
+        CompressionMetrics.reset();
+        Console.log("[Monitor] resetSqlMonitor — SQL execution counters + per-statement rollup + compression cleared");
+        return true;
+    }
+
     /** Builds the read/write SQL execution DTO (with top statements + in-flight) from the monitor. */
     private static SqlExecutionMonitorInfo buildSqlExecutionInfo() {
         SqlExecutionMonitor.Snapshot s = SqlExecutionMonitor.get().snapshot();

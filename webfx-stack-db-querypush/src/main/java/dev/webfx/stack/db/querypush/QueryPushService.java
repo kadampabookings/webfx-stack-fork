@@ -56,4 +56,12 @@ public final class QueryPushService {
         return getProvider().getSqlAnalyzeResult(statement);
     }
 
+    /**
+     * Resets the SQL execution metrics for a fresh /monitor window (see
+     * {@link QueryPushServiceProvider#resetSqlMonitor()}).
+     */
+    public static Boolean resetSqlMonitor() {
+        return getProvider().resetSqlMonitor();
+    }
+
 }

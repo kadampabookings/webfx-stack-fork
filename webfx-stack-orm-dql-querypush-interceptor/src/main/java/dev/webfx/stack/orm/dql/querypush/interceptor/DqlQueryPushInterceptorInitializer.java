@@ -66,6 +66,11 @@ public class DqlQueryPushInterceptorInitializer implements ApplicationJob {
                     public SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement) {
                         return targetProvider.getSqlAnalyzeResult(statement);
                     }
+
+                    @Override
+                    public Boolean resetSqlMonitor() {
+                        return targetProvider.resetSqlMonitor();
+                    }
                 }
         );
     }

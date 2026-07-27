@@ -51,6 +51,15 @@ public final class CompressionMetrics {
         return new Snapshot(count, totalNanos, maxNanos, slowCount, totalCells);
     }
 
+    /** Clears the counters so the /monitor page can measure a fresh window (Clear button). */
+    public static synchronized void reset() {
+        count = 0;
+        totalNanos = 0;
+        maxNanos = 0;
+        slowCount = 0;
+        totalCells = 0;
+    }
+
     /** Cumulative compression counters. Rates are derived client-side from poll-to-poll deltas. */
     public record Snapshot(long count, long totalNanos, long maxNanos, long slowCount, long totalCells) {}
 }

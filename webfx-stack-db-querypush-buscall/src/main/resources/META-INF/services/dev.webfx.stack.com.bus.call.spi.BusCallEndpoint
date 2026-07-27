@@ -3,3 +3,4 @@ dev.webfx.stack.db.querypush.buscall.CancelSqlQueryMethodEndpoint
 dev.webfx.stack.db.querypush.buscall.ExecuteQueryPushMethodEndpoint
 dev.webfx.stack.db.querypush.buscall.GetQueryPushMonitorInfoMethodEndpoint
 dev.webfx.stack.db.querypush.buscall.GetSqlAnalyzeResultMethodEndpoint
+dev.webfx.stack.db.querypush.buscall.ResetSqlMonitorMethodEndpoint
