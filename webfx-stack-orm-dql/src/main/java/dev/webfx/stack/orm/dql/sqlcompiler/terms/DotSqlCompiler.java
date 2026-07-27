@@ -49,14 +49,18 @@ public final class DotSqlCompiler extends AbstractTermSqlCompiler<Dot<?>> {
         } else // should never occur
             leftSql = rightTableAlias = null;
         QueryColumnToEntityFieldMapping leftJoinMapping = null;
-        if (o.isTopLevelSelect() && leftSql != null && dot.isReadLeftKey() && o.readForeignFields) // lecture de la clé étrangère pour pouvoir faire la jointure en mémoire
+        // scalarContext: inside a scalar select expression the foreign key must NOT be emitted as
+        // an extra column — it would be concatenated into the middle of the expression text
+        if (o.isTopLevelSelect() && !o.scalarContext && leftSql != null && dot.isReadLeftKey() && o.readForeignFields) // lecture de la clé étrangère pour pouvoir faire la jointure en mémoire
             leftJoinMapping = o.build.addColumnInClause(leftTableAlias, leftSql, left, rightClass, o.clause, o.separator, o.grouped, false, o.generateQueryMapping);
         o.build.setCompilingClass(rightClass);
         o.build.setCompilingTableAlias(rightTableAlias);
         QueryColumnToEntityFieldMapping oldLeftJoinMapping = o.build.getLeftJoinMapping();
         o.build.setLeftJoinMapping(leftJoinMapping);
         Expression<?> right = dot.getRight();
-        if (o.isTopLevelSelect() && o.separator != null && (!(right instanceof Symbol) || (((Symbol<?>) right).getExpression() != null && !o.compileExpressions)))
+        // scalarContext: a dot inside a scalar select expression compiles as a single scalar value
+        // — never decomposed into separately-loaded persistent field columns
+        if (o.isTopLevelSelect() && !o.scalarContext && o.separator != null && (!(right instanceof Symbol) || (((Symbol<?>) right).getExpression() != null && !o.compileExpressions)))
             compileExpressionPersistentTermsToSql(right, o);
         else
             compileChildExpressionToSql(right, o);
