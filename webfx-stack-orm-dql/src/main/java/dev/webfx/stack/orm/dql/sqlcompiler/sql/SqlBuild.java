@@ -431,6 +431,11 @@ public final class SqlBuild {
                 if (fieldAlias != null)
                     lateralSb.append(" as ").append(fieldAlias);
             }
+            // "offset 0" blocks Postgres from pulling the subquery up into the parent: a
+            // pulled-up lateral has its select expressions re-inlined at every reference
+            // site, so an expensive scalar subquery referenced N times (e.g. in N aggregate
+            // args) is evaluated N times per row instead of once.
+            lateralSb.append(" offset 0");
             lateralSqlMap.put(alias, lateralSb.toString());
         }
         orderedAliases.add(alias);
