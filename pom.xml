@@ -127,6 +127,9 @@
         <module>webfx-stack-hash-sha1</module>
         <module>webfx-stack-http-server-vertx-plugin</module>
         <module>webfx-stack-mail</module>
+        <module>webfx-stack-mail-transport</module>
+        <module>webfx-stack-mail-transport-sandbox-plugin</module>
+        <module>webfx-stack-mail-transport-smtp-vertx-plugin</module>
         <module>webfx-stack-orm-datasourcemodel-service</module>
         <module>webfx-stack-orm-domainmodel</module>
         <module>webfx-stack-orm-domainmodel-activity</module>
