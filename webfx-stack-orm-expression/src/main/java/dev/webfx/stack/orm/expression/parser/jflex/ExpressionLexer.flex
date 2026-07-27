@@ -137,6 +137,7 @@ OrderBy = [Oo][Rr][Dd][Ee][Rr]{WhiteSpace}+[Bb][Yy]
     "not"                          { return symbol(NOT); }
     "?"                            { return symbol(QUESTION); }
     "?."                           { return symbol(QUESTION_DOT); }
+    ".."                           { return symbol(QUESTION_DOT); } /* KBS2 OQL outer-join syntax, kept as an alias of ?. */
     "::"                           { return symbol(DOUBLE_COLON); }
     ":"                            { return symbol(COLON); }
     "=="                           { return symbol(EQEQ); }
