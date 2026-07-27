@@ -13,6 +13,7 @@ import dev.webfx.platform.util.Strings;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -500,7 +501,12 @@ public final class SqlBuild {
 
     private String addJoinCondition2(String table1Alias, String column1Name, String table2Alias, String table2Name, String column2Name, boolean leftOuter) {
         table1Alias = getSqlAlias(table1Alias, this);
-        Map<Join, Join> table1Joins = joins.computeIfAbsent(table1Alias, k -> new HashMap<>());
+        // LinkedHashMap: joins are emitted in the FROM clause in REGISTRATION order (select-clause
+        // joins first, where-clause joins last). This matters for queries with more relations than
+        // join_collapse_limit (8): only the first syntactic relations are freely reorderable by the
+        // planner, so a hash-random order used to push semantically-driving joins (e.g. an
+        // account-scoping person join referenced early in the select) out of the planner's reach.
+        Map<Join, Join> table1Joins = joins.computeIfAbsent(table1Alias, k -> new LinkedHashMap<>());
         Join join = new Join(table1Alias, column1Name, table2Name, column2Name, null, leftOuter);
         Join existingJoin = table1Joins.get(join); // fetching the map to see if the join already exists (see Join.equals())
         if (existingJoin != null) {
