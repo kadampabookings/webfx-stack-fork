@@ -67,6 +67,8 @@ public final class ExpressionSqlCompiler {
     public static SqlCompiled compileStatement(DqlStatement statement, DbmsSqlSyntax dbmsSyntax, CompilerDomainModelReader modelReader) {
         if (statement instanceof WithSelect)
             return compileWithSelect((WithSelect) statement, dbmsSyntax, modelReader);
+        if (statement instanceof Union)
+            return compileUnion((Union) statement, dbmsSyntax, false, false, false, modelReader);
         if (statement instanceof Insert)
             return compileInsert((Insert) statement, dbmsSyntax, modelReader);
         if (statement instanceof Update)
@@ -111,6 +113,34 @@ public final class ExpressionSqlCompiler {
         String combinedSql = withPrefix.toString() + mainCompiled.getSql();
         return new SqlCompiled(combinedSql, mainCompiled.getCountSql(), allParamNames, true,
                 null, mainCompiled.getQueryMapping(), mainCompiled.getSqlUncompilableCondition(), mainCompiled.isCacheable());
+    }
+
+    // Union compilation
+
+    public static SqlCompiled compileUnion(Union union, DbmsSqlSyntax dbmsSyntax, boolean generateQueryMapping, boolean readForeignFields, boolean compileExpressions, CompilerDomainModelReader modelReader) {
+        // Every branch is compiled with the SAME flags so they all emit the same column list
+        // (readForeignFields in particular expands foreign display fields into extra columns);
+        // the first branch's query mapping then applies to every row of the union result.
+        SqlCompiled firstCompiled = compileSelect(union.getFirstSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+        // Branches are parenthesized so a per-branch order by/limit/offset remains valid SQL
+        StringBuilder sql = new StringBuilder("(").append(firstCompiled.getSql()).append(')');
+        List<String> allParamNames = new ArrayList<>(firstCompiled.getParameterNames());
+        boolean cacheable = firstCompiled.isCacheable();
+        for (Object unionEntryObj : union.getUnions()) {
+            Object[] unionEntry = (Object[]) unionEntryObj;
+            boolean unionAll = (Boolean) unionEntry[0];
+            Select<?> branchSelect = (Select<?>) unionEntry[1];
+            SqlCompiled branchCompiled = compileSelect(branchSelect, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+            sql.append(unionAll ? " union all (" : " union (").append(branchCompiled.getSql()).append(')');
+            // Merge named parameters (preserving order, deduplicating) — positional $N parameters
+            // keep their index across branches, so they need no merging
+            for (String param : branchCompiled.getParameterNames())
+                if (!allParamNames.contains(param))
+                    allParamNames.add(param);
+            cacheable &= branchCompiled.isCacheable();
+        }
+        return new SqlCompiled(sql.toString(), null, allParamNames, true,
+                null, firstCompiled.getQueryMapping(), firstCompiled.getSqlUncompilableCondition(), cacheable);
     }
 
     // Select compilation
