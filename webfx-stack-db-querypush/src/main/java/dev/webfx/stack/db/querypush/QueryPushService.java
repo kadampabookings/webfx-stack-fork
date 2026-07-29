@@ -57,6 +57,14 @@ public final class QueryPushService {
     }
 
     /**
+     * Drops one statement's analyze arm + captured plan (see
+     * {@link QueryPushServiceProvider#resetSqlAnalyze(String)}).
+     */
+    public static Boolean resetSqlAnalyze(String statement) {
+        return getProvider().resetSqlAnalyze(statement);
+    }
+
+    /**
      * Resets the SQL execution metrics for a fresh /monitor window (see
      * {@link QueryPushServiceProvider#resetSqlMonitor()}).
      */

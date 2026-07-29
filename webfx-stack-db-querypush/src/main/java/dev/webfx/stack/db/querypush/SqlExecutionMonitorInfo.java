@@ -13,17 +13,21 @@ public final class SqlExecutionMonitorInfo {
     private final SqlKindMonitorInfo write;
     private final StatementMonitorInfo[] topStatements;      // ranked by total time (drill-down)
     private final InFlightQueryMonitorInfo[] inFlight;       // currently executing (drill-down + cancel targets)
+    private final SqlAnalyzeResultInfo[] analyzeResults;     // armed (pending) + captured (ready) analyze entries
 
     public SqlExecutionMonitorInfo(SqlKindMonitorInfo read, SqlKindMonitorInfo write,
-                                   StatementMonitorInfo[] topStatements, InFlightQueryMonitorInfo[] inFlight) {
+                                   StatementMonitorInfo[] topStatements, InFlightQueryMonitorInfo[] inFlight,
+                                   SqlAnalyzeResultInfo[] analyzeResults) {
         this.read = read;
         this.write = write;
         this.topStatements = topStatements;
         this.inFlight = inFlight;
+        this.analyzeResults = analyzeResults;
     }
 
     public SqlKindMonitorInfo getRead() { return read; }
     public SqlKindMonitorInfo getWrite() { return write; }
     public StatementMonitorInfo[] getTopStatements() { return topStatements; }
     public InFlightQueryMonitorInfo[] getInFlight() { return inFlight; }
+    public SqlAnalyzeResultInfo[] getAnalyzeResults() { return analyzeResults; }
 }

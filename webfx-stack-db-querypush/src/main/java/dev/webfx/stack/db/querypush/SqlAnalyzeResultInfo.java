@@ -15,13 +15,15 @@ package dev.webfx.stack.db.querypush;
  */
 public final class SqlAnalyzeResultInfo {
 
+    private final String statement;         // the analyzed statement — null for a single-statement poll, set in the snapshot list
     private final String status;            // "pending" | "ready" | "none"
     private final String plan;              // EXPLAIN output, non-null only when ready
     private final String dql;               // original DQL, null unless ready and DQL-derived
     private final String parameters;        // display of the captured parameters, may be null
     private final long capturedAgeMillis;   // ms since capture when ready, else -1
 
-    public SqlAnalyzeResultInfo(String status, String plan, String dql, String parameters, long capturedAgeMillis) {
+    public SqlAnalyzeResultInfo(String statement, String status, String plan, String dql, String parameters, long capturedAgeMillis) {
+        this.statement = statement;
         this.status = status;
         this.plan = plan;
         this.dql = dql;
@@ -29,6 +31,7 @@ public final class SqlAnalyzeResultInfo {
         this.capturedAgeMillis = capturedAgeMillis;
     }
 
+    public String getStatement() { return statement; }
     public String getStatus() { return status; }
     public String getPlan() { return plan; }
     public String getDql() { return dql; }

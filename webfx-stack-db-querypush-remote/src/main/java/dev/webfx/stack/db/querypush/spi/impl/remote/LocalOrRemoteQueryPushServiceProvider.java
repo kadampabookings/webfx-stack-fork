@@ -70,6 +70,13 @@ public class LocalOrRemoteQueryPushServiceProvider implements QueryPushServicePr
     }
 
     @Override
+    public Boolean resetSqlAnalyze(String statement) {
+        // Client-side provider: the per-statement reset is routed to the server via the dedicated
+        // buscall endpoint (service/querypush/resetSqlAnalyze), not through this local API.
+        return null;
+    }
+
+    @Override
     public Boolean resetSqlMonitor() {
         // Client-side provider: the reset is routed to the server via the dedicated buscall endpoint
         // (service/querypush/resetSqlMonitor), not through this local API.

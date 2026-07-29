@@ -176,7 +176,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             Console.log("[Monitor] armSqlAnalyze rejected — not a known read statement");
             return false;
         }
-        SqlAnalyzeRegistry.get().arm(statement, System.currentTimeMillis(), SqlAnalyzeRegistry.DEFAULT_ARM_TTL_MILLIS);
+        SqlAnalyzeRegistry.get().arm(statement, System.currentTimeMillis());
         Console.log("[Monitor] armSqlAnalyze armed a read statement for next-occurrence EXPLAIN");
         return true;
     }
@@ -187,15 +187,17 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         if (LogoutUserId.isLogoutUserIdOrNull(callerUserId))
             return null;
         long now = System.currentTimeMillis();
-        SqlAnalyzeRegistry.Result r = SqlAnalyzeRegistry.get().getResult(statement, now);
-        switch (r.status) {
-            case READY:
-                return new SqlAnalyzeResultInfo("ready", r.planText, r.dqlStatement, r.parametersDisplay, Math.max(0, now - r.atMillis));
-            case PENDING:
-                return new SqlAnalyzeResultInfo("pending", null, null, null, -1);
-            default:
-                return new SqlAnalyzeResultInfo("none", null, null, null, -1);
-        }
+        return toAnalyzeInfo(SqlAnalyzeRegistry.get().getResult(statement, now), now);
+    }
+
+    @Override
+    public Boolean resetSqlAnalyze(String statement) {
+        // Same gate as getMonitorInfo. A null return fails the buscall for an unauthorized caller.
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId))
+            return null;
+        SqlAnalyzeRegistry.get().remove(statement);
+        return true;
     }
 
     @Override
@@ -208,8 +210,21 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         }
         SqlExecutionMonitor.get().reset();
         CompressionMetrics.reset();
-        Console.log("[Monitor] resetSqlMonitor — SQL execution counters + per-statement rollup + compression cleared");
+        SqlAnalyzeRegistry.get().clearAll(); // fresh window drops every pending/captured analyze arm
+        Console.log("[Monitor] resetSqlMonitor — SQL execution counters + per-statement rollup + compression + analyze arms cleared");
         return true;
+    }
+
+    /** Maps a registry result to its wire DTO (carrying the statement so the snapshot list is self-identifying). */
+    private static SqlAnalyzeResultInfo toAnalyzeInfo(SqlAnalyzeRegistry.Result r, long now) {
+        switch (r.status) {
+            case READY:
+                return new SqlAnalyzeResultInfo(r.statement, "ready", r.planText, r.dqlStatement, r.parametersDisplay, Math.max(0, now - r.atMillis));
+            case PENDING:
+                return new SqlAnalyzeResultInfo(r.statement, "pending", null, null, null, -1);
+            default:
+                return new SqlAnalyzeResultInfo(r.statement, "none", null, null, null, -1);
+        }
     }
 
     /** Builds the read/write SQL execution DTO (with top statements + in-flight) from the monitor. */
@@ -227,7 +242,14 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             SqlExecutionMonitor.InFlightSnapshot f = fs.get(i);
             flights[i] = new InFlightQueryMonitorInfo(f.id(), kindName(f.kind()), f.statement(), f.ageMillis());
         }
-        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights);
+        // Armed (pending) + captured (ready) analyze entries, so the page's regular snapshot surfaces
+        // a plan whenever the query eventually runs — no client-side polling / timeout.
+        long now = System.currentTimeMillis();
+        List<SqlAnalyzeRegistry.Result> ar = SqlAnalyzeRegistry.get().snapshotAll();
+        SqlAnalyzeResultInfo[] analyze = new SqlAnalyzeResultInfo[ar.size()];
+        for (int i = 0; i < analyze.length; i++)
+            analyze[i] = toAnalyzeInfo(ar.get(i), now);
+        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights, analyze);
     }
 
     private static String kindName(SqlExecutionMonitor.Kind k) {

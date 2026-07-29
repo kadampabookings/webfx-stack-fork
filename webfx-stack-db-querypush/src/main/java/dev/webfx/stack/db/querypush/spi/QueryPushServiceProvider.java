@@ -58,6 +58,15 @@ public interface QueryPushServiceProvider {
     SqlAnalyzeResultInfo getSqlAnalyzeResult(String statement);
 
     /**
+     * Drops one statement's analyze arm and captured plan (the /monitor per-row "Reset"), so its row
+     * returns to "Analyze". Returns TRUE when handled, and null when not available (client-side
+     * providers, or a caller that isn't a logged-in user).
+     * <p>
+     * Deliberately NOT defaulted (like {@link #getMonitorInfo()}) so decorators must delegate.
+     */
+    Boolean resetSqlAnalyze(String statement);
+
+    /**
      * Resets the SQL execution metrics (cumulative counters + per-statement rollup + compression)
      * so the /monitor page can measure a fresh window. Returns TRUE when reset, and null when not
      * available (client-side providers, or a caller that isn't a logged-in user). Live state (queues,
