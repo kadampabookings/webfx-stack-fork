@@ -150,23 +150,26 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                     originOf(sawBackoffice, sawFrontoffice)));
             }
         }
+        // Snapshot the connected clients ONCE (a defensive copy) and derive both breakdowns from it —
+        // a single, consistent view, and one pass over the push registry.
+        List<PushClientMetadata> connectedClients = PushServerService.snapshotConnectedClients();
         return new QueryPushMonitorInfo(
             PushServerService.getPushClientsCount(),
             allUserIds.size(),
             queryStreams.toArray(new QueryStreamMonitorInfo[0]),
             buildSqlExecutionInfo(),
             buildCompressionInfo(),
-            buildClientVersionDistribution(),
-            buildClientPwaDistribution());
+            buildClientVersionDistribution(connectedClients),
+            buildClientPwaDistribution(connectedClients));
     }
 
     /** Placeholder bucket name for a connected client that hasn't reported the fact yet (older client). */
     private static final String UNKNOWN_BUCKET = "unknown";
 
     /** Connected-clients breakdown by build version (an "unknown" bucket for clients that don't report it). */
-    private static NameCountInfo[] buildClientVersionDistribution() {
+    private static NameCountInfo[] buildClientVersionDistribution(List<PushClientMetadata> connectedClients) {
         Map<String, Integer> counts = new LinkedHashMap<>();
-        for (PushClientMetadata c : PushServerService.snapshotConnectedClients()) {
+        for (PushClientMetadata c : connectedClients) {
             String version = c.getClientVersion();
             counts.merge(version == null ? UNKNOWN_BUCKET : version, 1, Integer::sum);
         }
@@ -174,13 +177,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     }
 
     /** Connected-clients breakdown by PWA display mode: installed / browser / unknown. */
-    private static NameCountInfo[] buildClientPwaDistribution() {
+    private static NameCountInfo[] buildClientPwaDistribution(List<PushClientMetadata> connectedClients) {
         // LinkedHashMap keeps a stable, meaningful order (installed, browser, unknown) for display.
         Map<String, Integer> counts = new LinkedHashMap<>();
         counts.put("installed", 0);
         counts.put("browser", 0);
         int unknown = 0;
-        for (PushClientMetadata c : PushServerService.snapshotConnectedClients()) {
+        for (PushClientMetadata c : connectedClients) {
             Boolean pwa = c.getPwa();
             if (pwa == null)
                 unknown++;

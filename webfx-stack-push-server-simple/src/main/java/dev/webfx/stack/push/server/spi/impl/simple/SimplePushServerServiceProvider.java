@@ -14,9 +14,9 @@ import dev.webfx.stack.push.server.UnresponsivePushClientListener;
 import dev.webfx.stack.push.server.spi.PushServerServiceProvider;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * @author Bruno Salmon
@@ -27,7 +27,10 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
 
     private final static boolean LOG_PUSH = true;
 
-    private final Map<Object /*clientRunId*/, PushClientInfo> pushClientInfos = new HashMap<>();
+    // ConcurrentHashMap: the monitor's snapshotConnectedClients() iterates this map while other event
+    // loops mutate it (push() creates entries, pushFailed() removes them) — a plain HashMap would throw
+    // ConcurrentModificationException under real multi-client load (breaking getMonitorInfo).
+    private final Map<Object /*clientRunId*/, PushClientInfo> pushClientInfos = new ConcurrentHashMap<>();
     private final List<UnresponsivePushClientListener> unresponsivePushClientListeners = new ArrayList<>();
 
     @Override
