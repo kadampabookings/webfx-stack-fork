@@ -95,9 +95,9 @@ public final class SqlExecutionMonitor {
      * module stays free of any Vert.x dependency), which {@link #cancel(long)} runs on request;
      * pass null when none is available.
      */
-    public synchronized long onStart(Kind kind, String statement, Object cancelHandle) {
+    public synchronized long onStart(Kind kind, String statement, Object cancelHandle, Boolean backoffice) {
         long id = ++idSeq;
-        inFlight.put(id, new InFlight(id, kind, statement, System.nanoTime(), cancelHandle));
+        inFlight.put(id, new InFlight(id, kind, statement, System.nanoTime(), cancelHandle, backoffice));
         return id;
     }
 
@@ -117,6 +117,13 @@ public final class SqlExecutionMonitor {
         stat.totalNanos += nanos;
         if (nanos > stat.maxNanos)
             stat.maxNanos = nanos;
+        // Accumulate the caller's origin (BO/FO) — a statement run from both sides reports "both".
+        if (f.backoffice != null) {
+            if (f.backoffice)
+                stat.sawBackoffice = true;
+            else
+                stat.sawFrontoffice = true;
+        }
     }
 
     /** Returns the opaque cancel handle for an in-flight query, or null if it already finished. */
@@ -198,7 +205,7 @@ public final class SqlExecutionMonitor {
             long nowNanos = System.nanoTime();
             flights = new ArrayList<>(inFlight.size());
             for (InFlight f : inFlight.values()) {
-                flights.add(new InFlightSnapshot(f.id, f.kind, f.statement, (nowNanos - f.startNanos) / 1_000_000L));
+                flights.add(new InFlightSnapshot(f.id, f.kind, f.statement, (nowNanos - f.startNanos) / 1_000_000L, originOf(f.backoffice)));
             }
             List<Map.Entry<String, StatementStat>> entries = new ArrayList<>(statementStats.entrySet());
             entries.sort(Comparator.comparingLong((Map.Entry<String, StatementStat> e) -> e.getValue().totalNanos).reversed());
@@ -207,7 +214,7 @@ public final class SqlExecutionMonitor {
             for (int i = 0; i < limit; i++) {
                 Map.Entry<String, StatementStat> e = entries.get(i);
                 StatementStat s = e.getValue();
-                statements.add(new StatementSnapshot(e.getKey(), s.kind, s.count, s.totalNanos, s.maxNanos));
+                statements.add(new StatementSnapshot(e.getKey(), s.kind, s.count, s.totalNanos, s.maxNanos, originOf(s.sawBackoffice, s.sawFrontoffice)));
             }
         }
         return new Snapshot(kindSnapshot(rc, rt, re, rq), kindSnapshot(wc, wt, we, wq), statements, flights);
@@ -236,13 +243,15 @@ public final class SqlExecutionMonitor {
         private final String statement;
         private final long startNanos;
         private final Object cancelHandle;
+        private final Boolean backoffice; // caller origin: TRUE=BO, FALSE=FO, null=unknown (server-internal)
 
-        InFlight(long id, Kind kind, String statement, long startNanos, Object cancelHandle) {
+        InFlight(long id, Kind kind, String statement, long startNanos, Object cancelHandle, Boolean backoffice) {
             this.id = id;
             this.kind = kind;
             this.statement = statement;
             this.startNanos = startNanos;
             this.cancelHandle = cancelHandle;
+            this.backoffice = backoffice;
         }
     }
 
@@ -252,10 +261,28 @@ public final class SqlExecutionMonitor {
         private long count;
         private long totalNanos;
         private long maxNanos;
+        private boolean sawBackoffice; // this statement was run by a back-office caller at least once
+        private boolean sawFrontoffice; // …and/or by a front-office caller (both → "both")
 
         StatementStat(Kind kind) {
             this.kind = kind;
         }
+    }
+
+    /** Origin label from accumulated BO/FO flags: "both" / "bo" / "fo" / null (neither seen). */
+    private static String originOf(boolean bo, boolean fo) {
+        if (bo && fo)
+            return "both";
+        if (bo)
+            return "bo";
+        if (fo)
+            return "fo";
+        return null;
+    }
+
+    /** Origin label for a single caller: TRUE → "bo", FALSE → "fo", null → null (unknown). */
+    private static String originOf(Boolean backoffice) {
+        return backoffice == null ? null : backoffice ? "bo" : "fo";
     }
 
     /**
@@ -270,10 +297,10 @@ public final class SqlExecutionMonitor {
      * Per-statement snapshot (ranked by total time). {@code statement} is already parameter-free
      * ($1, $2 …), so it is the natural rollup key.
      */
-    public record StatementSnapshot(String statement, Kind kind, long count, long totalNanos, long maxNanos) {}
+    public record StatementSnapshot(String statement, Kind kind, long count, long totalNanos, long maxNanos, String origin) {}
 
-    /** A currently-executing SQL statement, with how long it has been running. */
-    public record InFlightSnapshot(long id, Kind kind, String statement, long ageMillis) {}
+    /** A currently-executing SQL statement, with how long it has been running. {@code origin} = bo/fo/null. */
+    public record InFlightSnapshot(long id, Kind kind, String statement, long ageMillis, String origin) {}
 
     /** Immutable snapshot of read/write execution, the top statements, and the in-flight queries. */
     public record Snapshot(KindSnapshot read, KindSnapshot write,

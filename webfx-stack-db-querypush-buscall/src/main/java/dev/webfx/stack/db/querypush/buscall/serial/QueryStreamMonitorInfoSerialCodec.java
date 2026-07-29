@@ -17,6 +17,7 @@ public final class QueryStreamMonitorInfoSerialCodec extends SerialCodecBase<Que
     private static final String CLIENTS_COUNT_KEY = "clientsCount";
     private static final String USERS_COUNT_KEY = "usersCount";
     private static final String LAST_EXECUTION_AGE_MILLIS_KEY = "lastExecutionAgeMillis";
+    private static final String ORIGIN_KEY = "origin";
 
     public QueryStreamMonitorInfoSerialCodec() {
         super(QueryStreamMonitorInfo.class, CODEC_ID);
@@ -33,6 +34,7 @@ public final class QueryStreamMonitorInfoSerialCodec extends SerialCodecBase<Que
         encodeInteger(    serial, CLIENTS_COUNT_KEY,            arg.getClientsCount());
         encodeInteger(    serial, USERS_COUNT_KEY,              arg.getUsersCount());
         encodeLong(       serial, LAST_EXECUTION_AGE_MILLIS_KEY, arg.getLastExecutionAgeMillis());
+        encodeString(     serial, ORIGIN_KEY,                   arg.getOrigin());
     }
 
     @Override
@@ -47,7 +49,8 @@ public final class QueryStreamMonitorInfoSerialCodec extends SerialCodecBase<Que
                 decodeInteger(    serial, ACTIVE_STREAM_COUNT_KEY, 0),
                 decodeInteger(    serial, CLIENTS_COUNT_KEY, 0),
                 decodeInteger(    serial, USERS_COUNT_KEY, 0),
-                lastExecutionAgeMillis == null ? -1 : lastExecutionAgeMillis
+                lastExecutionAgeMillis == null ? -1 : lastExecutionAgeMillis,
+                decodeString(     serial, ORIGIN_KEY)
         );
     }
 

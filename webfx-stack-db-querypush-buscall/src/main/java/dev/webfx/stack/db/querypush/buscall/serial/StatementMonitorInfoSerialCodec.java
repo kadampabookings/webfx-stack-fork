@@ -13,6 +13,7 @@ public final class StatementMonitorInfoSerialCodec extends SerialCodecBase<State
     private static final String COUNT_KEY = "count";
     private static final String TOTAL_NANOS_KEY = "totalNanos";
     private static final String MAX_NANOS_KEY = "maxNanos";
+    private static final String ORIGIN_KEY = "origin";
 
     public StatementMonitorInfoSerialCodec() {
         super(StatementMonitorInfo.class, CODEC_ID);
@@ -25,6 +26,7 @@ public final class StatementMonitorInfoSerialCodec extends SerialCodecBase<State
         encodeLong(  serial, COUNT_KEY,       arg.getCount());
         encodeLong(  serial, TOTAL_NANOS_KEY, arg.getTotalNanos());
         encodeLong(  serial, MAX_NANOS_KEY,   arg.getMaxNanos());
+        encodeString(serial, ORIGIN_KEY,      arg.getOrigin());
     }
 
     @Override
@@ -34,7 +36,8 @@ public final class StatementMonitorInfoSerialCodec extends SerialCodecBase<State
             decodeString(serial, KIND_KEY),
             orZero(decodeLong(serial, COUNT_KEY)),
             orZero(decodeLong(serial, TOTAL_NANOS_KEY)),
-            orZero(decodeLong(serial, MAX_NANOS_KEY)));
+            orZero(decodeLong(serial, MAX_NANOS_KEY)),
+            decodeString(serial, ORIGIN_KEY));
     }
 
     private static long orZero(Long l) {

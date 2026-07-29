@@ -12,6 +12,7 @@ public final class InFlightQueryMonitorInfoSerialCodec extends SerialCodecBase<I
     private static final String KIND_KEY = "kind";
     private static final String STATEMENT_KEY = "statement";
     private static final String AGE_MILLIS_KEY = "ageMillis";
+    private static final String ORIGIN_KEY = "origin";
 
     public InFlightQueryMonitorInfoSerialCodec() {
         super(InFlightQueryMonitorInfo.class, CODEC_ID);
@@ -23,6 +24,7 @@ public final class InFlightQueryMonitorInfoSerialCodec extends SerialCodecBase<I
         encodeString(serial, KIND_KEY,       arg.getKind());
         encodeString(serial, STATEMENT_KEY,  arg.getStatement());
         encodeLong(  serial, AGE_MILLIS_KEY, arg.getAgeMillis());
+        encodeString(serial, ORIGIN_KEY,     arg.getOrigin());
     }
 
     @Override
@@ -31,7 +33,8 @@ public final class InFlightQueryMonitorInfoSerialCodec extends SerialCodecBase<I
             orZero(decodeLong(serial, ID_KEY)),
             decodeString(serial, KIND_KEY),
             decodeString(serial, STATEMENT_KEY),
-            orZero(decodeLong(serial, AGE_MILLIS_KEY)));
+            orZero(decodeLong(serial, AGE_MILLIS_KEY)),
+            decodeString(serial, ORIGIN_KEY));
     }
 
     private static long orZero(Long l) {

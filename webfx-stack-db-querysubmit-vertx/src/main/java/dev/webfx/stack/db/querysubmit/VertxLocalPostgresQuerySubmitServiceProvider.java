@@ -102,7 +102,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
 
     @Override
     public Future<QueryResult> executeQuery(QueryArgument argument) {
-        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), coalescingKey(argument, ThreadLocalStateHolder.getRunId()), this::executeQueryNow);
+        Object runId = ThreadLocalStateHolder.getRunId();
+        Boolean backoffice = callerBackoffice(runId);
+        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), coalescingKey(argument, runId), arg -> executeQueryNow(arg, backoffice));
     }
 
     /**
@@ -118,10 +120,21 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         return runId + ":" + callId;
     }
 
-    private Future<QueryResult> executeQueryNow(QueryArgument argument) {
+    /**
+     * The caller's origin for the /monitor BO/FO breakdown: TRUE = back-office, FALSE = front-office,
+     * null = unknown (no caller — e.g. a server-internal push re-fire, which has no runId). Read on the
+     * CALLER thread at the service entry — the thread-local state is gone by the time the async SQL
+     * execution runs. Reliable for the React clients (a back-office client sends the backoffice flag on
+     * every message; a front-office client never does).
+     */
+    private static Boolean callerBackoffice(Object runId) {
+        return runId == null ? null : ThreadLocalStateHolder.isBackoffice();
+    }
+
+    private Future<QueryResult> executeQueryNow(QueryArgument argument, Boolean backoffice) {
         long t0 = System.currentTimeMillis();
         long t0n = System.nanoTime();
-        return toWebfxFuture(withConnection(pool, connection -> executeConnectionQuery(connection, argument)))
+        return toWebfxFuture(withConnection(pool, connection -> executeConnectionQuery(connection, argument, backoffice)))
             .onFailure(e -> log("⛔️ ERROR with executeQuery(" + argument + "): " + e.getMessage()))
             .onSuccess(x -> { // Just for time report
                 if (LOG_TIMINGS) {
@@ -139,16 +152,18 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // priority and source.
         QueryArgument[] arr = batch.getArray();
         int priority = arr.length > 0 ? arr[0].getPriority() : QueryArgument.STANDARD_PRIORITY;
-        Object key = arr.length > 0 ? coalescingKey(arr[0], ThreadLocalStateHolder.getRunId()) : null;
-        return asyncQueue.addAsyncOperation(batch, priority, key, this::executeQueryBatchNow);
+        Object runId = ThreadLocalStateHolder.getRunId();
+        Object key = arr.length > 0 ? coalescingKey(arr[0], runId) : null;
+        Boolean backoffice = callerBackoffice(runId);
+        return asyncQueue.addAsyncOperation(batch, priority, key, b -> executeQueryBatchNow(b, backoffice));
     }
 
-    private Future<Batch<QueryResult>> executeQueryBatchNow(Batch<QueryArgument> batch) {
+    private Future<Batch<QueryResult>> executeQueryBatchNow(Batch<QueryArgument> batch, Boolean backoffice) {
         long t0 = System.currentTimeMillis();
         long t0n = System.nanoTime();
         return toWebfxFuture(withConnection(pool, connection ->
             toVertxFuture(batch.executeSerial(QueryResult[]::new, arg ->
-                toWebfxFuture(executeConnectionQuery(connection, arg))))
+                toWebfxFuture(executeConnectionQuery(connection, arg, backoffice))))
         ))
             .onFailure(e -> log("⛔️ ERROR with executeQueryBatch(" + batch + "): " + e.getMessage()))
             .onSuccess(x -> { // Just for time report
@@ -160,10 +175,10 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
     }
 
-    private io.vertx.core.Future<QueryResult> executeConnectionQuery(SqlConnection connection, QueryArgument argument) {
-        // Register this actual SQL execution in the monitor (statement + cancel handle), for the
-        // /monitor in-flight list + per-statement rollup; deregister on completion.
-        long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection));
+    private io.vertx.core.Future<QueryResult> executeConnectionQuery(SqlConnection connection, QueryArgument argument, Boolean backoffice) {
+        // Register this actual SQL execution in the monitor (statement + cancel handle + caller origin),
+        // for the /monitor in-flight list + per-statement rollup; deregister on completion.
+        long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection), backoffice);
         // If an admin armed this statement for analyze, capture its real params and EXPLAIN it
         // (separate connection — the real query below is untouched). Reads only, by construction:
         // this is the query path (monitorKind == READ); the submit path never analyzes.
@@ -249,13 +264,14 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
     public Future<SubmitResult> executeSubmit(SubmitArgument argument) {
         // Submits get priority but no source-based coalescing (sourceId=null): cancelling a pending
         // submit because a newer same-source one arrived would drop side-effecting work.
-        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), null, this::executeSubmitNow);
+        Boolean backoffice = callerBackoffice(ThreadLocalStateHolder.getRunId());
+        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), null, arg -> executeSubmitNow(arg, backoffice));
     }
 
-    private Future<SubmitResult> executeSubmitNow(SubmitArgument argument) {
+    private Future<SubmitResult> executeSubmitNow(SubmitArgument argument, Boolean backoffice) {
         // Note: executeIndividualSubmitWithConnection() already logs failure and timing
         long t0n = System.nanoTime();
-        return toWebfxFuture(withConnection(pool, connection -> executeIndividualSubmitWithConnection(argument, connection, null)))
+        return toWebfxFuture(withConnection(pool, connection -> executeIndividualSubmitWithConnection(argument, connection, null, backoffice)))
             .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
     }
 
@@ -265,10 +281,11 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // on submits — see executeSubmit() for the rationale.
         SubmitArgument[] arr = batch.getArray();
         int priority = arr.length > 0 ? arr[0].getPriority() : SubmitArgument.STANDARD_PRIORITY;
-        return asyncQueue.addAsyncOperation(batch, priority, null, this::executeSubmitBatchNow);
+        Boolean backoffice = callerBackoffice(ThreadLocalStateHolder.getRunId());
+        return asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice));
     }
 
-    private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch) {
+    private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch, Boolean backoffice) {
         // This batch may use GeneratedKeyReference instances in its parameters, which we will need to resolve during
         // the execution. To do so, we create batchIndexGeneratedKeys, which is a list of generated keys for each
         // SubmitArgument in the batch (index 0 will contain the possible generated keys from the execution of the first
@@ -281,7 +298,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             // We execute the batch in a serial order (we need a couple of Vert.x <-> WebFX Future for that)
             toVertxFuture(batch.executeSerial(SubmitResult[]::new, arg -> toWebfxFuture(
                 // We execute this individual submission, passing batchIndexGeneratedKeys (for GeneratedKeyReference resolution)
-                executeIndividualSubmitWithConnection(arg, connection, batchIndexGeneratedKeys)
+                executeIndividualSubmitWithConnection(arg, connection, batchIndexGeneratedKeys, backoffice)
                     .map(submitResult -> { // Identity mapping, just for batchIndexGeneratedKeys management
                         // We collect the possible generated keys (if the last submission was "insert ... returning id")
                         batchIndexGeneratedKeys.add(submitResult.getGeneratedKeys());
@@ -302,9 +319,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
     }
 
 
-    private io.vertx.core.Future<SubmitResult> executeIndividualSubmitWithConnection(SubmitArgument argument, SqlConnection connection, List<Object[]> batchIndexGeneratedKeys) {
-        // Register this SQL execution in the monitor (statement + cancel handle); deregister on completion.
-        long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection));
+    private io.vertx.core.Future<SubmitResult> executeIndividualSubmitWithConnection(SubmitArgument argument, SqlConnection connection, List<Object[]> batchIndexGeneratedKeys, Boolean backoffice) {
+        // Register this SQL execution in the monitor (statement + cancel handle + caller origin); deregister on completion.
+        long monId = SqlExecutionMonitor.get().onStart(monitorKind, argument.getStatement(), pgCancelHandle(connection), backoffice);
         // We get a prepared query from the connection
         PreparedQuery<RowSet<Row>> preparedQuery = connection
             .preparedQuery(argument.getStatement()); // statement can be insert, update or delete

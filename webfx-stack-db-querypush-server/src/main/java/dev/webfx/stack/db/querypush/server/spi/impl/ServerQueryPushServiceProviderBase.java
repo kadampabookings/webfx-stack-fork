@@ -118,12 +118,19 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                 Object[] queryStreamIds = new Object[queryInfo.streamInfos.size()];
                 Set<Object> clientRunIds = new HashSet<>();
                 Set<Object> userIds = new HashSet<>();
+                boolean sawBackoffice = false, sawFrontoffice = false; // aggregate the subscribers' origin
                 for (int i = 0; i < queryStreamIds.length; i++) {
                     StreamInfo streamInfo = queryInfo.streamInfos.get(i);
                     queryStreamIds[i] = streamInfo.queryStreamId;
                     clientRunIds.add(streamInfo.clientRunId);
                     if (!LogoutUserId.isLogoutUserIdOrNull(streamInfo.userId))
                         userIds.add(streamInfo.userId);
+                    if (streamInfo.backoffice != null) {
+                        if (streamInfo.backoffice)
+                            sawBackoffice = true;
+                        else
+                            sawFrontoffice = true;
+                    }
                 }
                 allUserIds.addAll(userIds);
                 Object[] parameters = queryInfo.queryArgument.getParameters();
@@ -139,7 +146,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                     queryInfo.activeStreamCount,
                     clientRunIds.size(),
                     userIds.size(),
-                    queryInfo.lastQueryExecutionTime == 0 ? -1 : now() - queryInfo.lastQueryExecutionTime));
+                    queryInfo.lastQueryExecutionTime == 0 ? -1 : now() - queryInfo.lastQueryExecutionTime,
+                    originOf(sawBackoffice, sawFrontoffice)));
             }
         }
         return new QueryPushMonitorInfo(
@@ -280,13 +288,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         StatementMonitorInfo[] statements = new StatementMonitorInfo[ss.size()];
         for (int i = 0; i < statements.length; i++) {
             SqlExecutionMonitor.StatementSnapshot st = ss.get(i);
-            statements[i] = new StatementMonitorInfo(st.statement(), kindName(st.kind()), st.count(), st.totalNanos(), st.maxNanos());
+            statements[i] = new StatementMonitorInfo(st.statement(), kindName(st.kind()), st.count(), st.totalNanos(), st.maxNanos(), st.origin());
         }
         List<SqlExecutionMonitor.InFlightSnapshot> fs = s.inFlight();
         InFlightQueryMonitorInfo[] flights = new InFlightQueryMonitorInfo[fs.size()];
         for (int i = 0; i < flights.length; i++) {
             SqlExecutionMonitor.InFlightSnapshot f = fs.get(i);
-            flights[i] = new InFlightQueryMonitorInfo(f.id(), kindName(f.kind()), f.statement(), f.ageMillis());
+            flights[i] = new InFlightQueryMonitorInfo(f.id(), kindName(f.kind()), f.statement(), f.ageMillis(), f.origin());
         }
         // Armed (pending) + captured (ready) analyze entries, so the page's regular snapshot surfaces
         // a plan whenever the query eventually runs — no client-side polling / timeout.
@@ -300,6 +308,17 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
     private static String kindName(SqlExecutionMonitor.Kind k) {
         return k == SqlExecutionMonitor.Kind.WRITE ? "write" : "read";
+    }
+
+    /** Origin label from accumulated BO/FO flags: "both" / "bo" / "fo" / null (neither seen). */
+    private static String originOf(boolean backoffice, boolean frontoffice) {
+        if (backoffice && frontoffice)
+            return "both";
+        if (backoffice)
+            return "bo";
+        if (frontoffice)
+            return "fo";
+        return null;
     }
 
     private static SqlKindMonitorInfo toKindInfo(SqlExecutionMonitor.KindSnapshot k) {
@@ -673,6 +692,9 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         // Captured at subscription time for monitoring (may be null for anonymous clients; a user
         // logging in after opening the stream is not reflected — new streams will carry the userId).
         public final Object userId;
+        // Subscriber origin for the /monitor BO/FO breakdown: TRUE=back-office, FALSE=front-office,
+        // null=unknown. Captured on the subscribing client's thread (reliable for React clients).
+        public final Boolean backoffice;
         public Boolean active;
         public Boolean close;
         public QueryInfo queryInfo;
@@ -687,6 +709,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             queryStreamId = arg.getQueryStreamId();
             clientRunId = ThreadLocalStateHolder.getRunId();
             userId = ThreadLocalStateHolder.getUserId();
+            backoffice = clientRunId == null ? null : ThreadLocalStateHolder.isBackoffice();
             Object parentQueryStreamId = arg.getParentQueryStreamId();
             parentStreamInfo = getStreamInfo(parentQueryStreamId);
             if (parentStreamInfo != null)

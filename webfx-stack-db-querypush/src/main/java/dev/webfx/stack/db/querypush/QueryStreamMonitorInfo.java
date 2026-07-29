@@ -19,8 +19,9 @@ public final class QueryStreamMonitorInfo {
     private final int clientsCount; // distinct client runIds (~ browser tabs) subscribed to this query
     private final int usersCount; // distinct logged-in users subscribed to this query
     private final long lastExecutionAgeMillis; // -1 when the query hasn't been executed yet
+    private final String origin; // "bo" / "fo" / "both" / null — client type(s) of the subscribers
 
-    public QueryStreamMonitorInfo(Object[] queryStreamIds, String statement, String parameters, int rowCount, int streamCount, int activeStreamCount, int clientsCount, int usersCount, long lastExecutionAgeMillis) {
+    public QueryStreamMonitorInfo(Object[] queryStreamIds, String statement, String parameters, int rowCount, int streamCount, int activeStreamCount, int clientsCount, int usersCount, long lastExecutionAgeMillis, String origin) {
         this.queryStreamIds = queryStreamIds;
         this.statement = statement;
         this.parameters = parameters;
@@ -30,6 +31,7 @@ public final class QueryStreamMonitorInfo {
         this.clientsCount = clientsCount;
         this.usersCount = usersCount;
         this.lastExecutionAgeMillis = lastExecutionAgeMillis;
+        this.origin = origin;
     }
 
     public Object[] getQueryStreamIds() {
@@ -66,5 +68,9 @@ public final class QueryStreamMonitorInfo {
 
     public long getLastExecutionAgeMillis() {
         return lastExecutionAgeMillis;
+    }
+
+    public String getOrigin() {
+        return origin;
     }
 }
