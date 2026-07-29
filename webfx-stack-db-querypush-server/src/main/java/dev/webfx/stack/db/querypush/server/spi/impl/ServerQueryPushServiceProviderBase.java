@@ -15,6 +15,7 @@ import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
+import dev.webfx.stack.db.querypush.NameCountInfo;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
@@ -26,6 +27,7 @@ import dev.webfx.stack.db.querypush.diff.QueryResultComparator;
 import dev.webfx.stack.db.querypush.diff.QueryResultDiff;
 import dev.webfx.stack.db.querypush.server.QueryPushServerService;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
+import dev.webfx.stack.push.server.PushClientMetadata;
 import dev.webfx.stack.push.server.PushServerService;
 import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
@@ -34,7 +36,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -143,7 +147,49 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             allUserIds.size(),
             queryStreams.toArray(new QueryStreamMonitorInfo[0]),
             buildSqlExecutionInfo(),
-            buildCompressionInfo());
+            buildCompressionInfo(),
+            buildClientVersionDistribution(),
+            buildClientPwaDistribution());
+    }
+
+    /** Placeholder bucket name for a connected client that hasn't reported the fact yet (older client). */
+    private static final String UNKNOWN_BUCKET = "unknown";
+
+    /** Connected-clients breakdown by build version (an "unknown" bucket for clients that don't report it). */
+    private static NameCountInfo[] buildClientVersionDistribution() {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (PushClientMetadata c : PushServerService.snapshotConnectedClients()) {
+            String version = c.getClientVersion();
+            counts.merge(version == null ? UNKNOWN_BUCKET : version, 1, Integer::sum);
+        }
+        return toNameCounts(counts);
+    }
+
+    /** Connected-clients breakdown by PWA display mode: installed / browser / unknown. */
+    private static NameCountInfo[] buildClientPwaDistribution() {
+        // LinkedHashMap keeps a stable, meaningful order (installed, browser, unknown) for display.
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        counts.put("installed", 0);
+        counts.put("browser", 0);
+        int unknown = 0;
+        for (PushClientMetadata c : PushServerService.snapshotConnectedClients()) {
+            Boolean pwa = c.getPwa();
+            if (pwa == null)
+                unknown++;
+            else
+                counts.merge(pwa ? "installed" : "browser", 1, Integer::sum);
+        }
+        if (unknown > 0)
+            counts.put(UNKNOWN_BUCKET, unknown);
+        return toNameCounts(counts);
+    }
+
+    private static NameCountInfo[] toNameCounts(Map<String, Integer> counts) {
+        NameCountInfo[] result = new NameCountInfo[counts.size()];
+        int i = 0;
+        for (Map.Entry<String, Integer> e : counts.entrySet())
+            result[i++] = new NameCountInfo(e.getKey(), e.getValue());
+        return result;
     }
 
     @Override

@@ -4,6 +4,7 @@ import dev.webfx.platform.ast.AstObject;
 import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.stack.com.serial.spi.impl.SerialCodecBase;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
+import dev.webfx.stack.db.querypush.NameCountInfo;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
@@ -16,6 +17,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String QUERY_STREAMS_KEY = "queryStreams";
     private static final String SQL_EXECUTION_KEY = "sqlExecution";
     private static final String COMPRESSION_KEY = "compression";
+    private static final String CLIENT_VERSIONS_KEY = "clientVersions";
+    private static final String CLIENT_PWA_MODES_KEY = "clientPwaModes";
 
     public QueryPushMonitorInfoSerialCodec() {
         super(QueryPushMonitorInfo.class, CODEC_ID);
@@ -29,6 +32,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         // Null on older servers — encodeObject skips nulls, decodeObject returns null.
         encodeObject( serial, SQL_EXECUTION_KEY,          arg.getSqlExecution());
         encodeObject( serial, COMPRESSION_KEY,            arg.getCompression());
+        encodeArray(  serial, CLIENT_VERSIONS_KEY,        arg.getClientVersions());
+        encodeArray(  serial, CLIENT_PWA_MODES_KEY,       arg.getClientPwaModes());
     }
 
     @Override
@@ -38,7 +43,9 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
                 decodeInteger(serial, SUBSCRIBED_USERS_COUNT_KEY, 0),
                 decodeArray(  serial, QUERY_STREAMS_KEY, QueryStreamMonitorInfo.class),
                 (SqlExecutionMonitorInfo) decodeObject(serial, SQL_EXECUTION_KEY),
-                (CompressionMonitorInfo) decodeObject(serial, COMPRESSION_KEY)
+                (CompressionMonitorInfo) decodeObject(serial, COMPRESSION_KEY),
+                decodeArray(  serial, CLIENT_VERSIONS_KEY, NameCountInfo.class),
+                decodeArray(  serial, CLIENT_PWA_MODES_KEY, NameCountInfo.class)
         );
     }
 

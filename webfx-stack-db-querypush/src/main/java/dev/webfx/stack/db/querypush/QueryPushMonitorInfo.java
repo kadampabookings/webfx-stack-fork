@@ -16,14 +16,19 @@ public final class QueryPushMonitorInfo {
     private final QueryStreamMonitorInfo[] queryStreams;
     private final SqlExecutionMonitorInfo sqlExecution; // read/write SQL execution metrics (may be null on older servers)
     private final CompressionMonitorInfo compression;   // QueryResult compression metrics (may be null on older servers)
+    private final NameCountInfo[] clientVersions;       // connected-clients breakdown by build version (may be null on older servers)
+    private final NameCountInfo[] clientPwaModes;       // connected-clients breakdown by PWA mode: installed/browser/unknown (may be null on older servers)
 
     public QueryPushMonitorInfo(int pushClientsCount, int subscribedUsersCount, QueryStreamMonitorInfo[] queryStreams,
-                                SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression) {
+                                SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression,
+                                NameCountInfo[] clientVersions, NameCountInfo[] clientPwaModes) {
         this.pushClientsCount = pushClientsCount;
         this.subscribedUsersCount = subscribedUsersCount;
         this.queryStreams = queryStreams;
         this.sqlExecution = sqlExecution;
         this.compression = compression;
+        this.clientVersions = clientVersions;
+        this.clientPwaModes = clientPwaModes;
     }
 
     public int getPushClientsCount() {
@@ -44,5 +49,13 @@ public final class QueryPushMonitorInfo {
 
     public CompressionMonitorInfo getCompression() {
         return compression;
+    }
+
+    public NameCountInfo[] getClientVersions() {
+        return clientVersions;
+    }
+
+    public NameCountInfo[] getClientPwaModes() {
+        return clientPwaModes;
     }
 }

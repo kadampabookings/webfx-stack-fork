@@ -1,10 +1,14 @@
 package dev.webfx.stack.push.server.spi;
 
 import dev.webfx.stack.com.bus.DeliveryOptions;
+import dev.webfx.stack.push.server.PushClientMetadata;
 import dev.webfx.stack.push.server.UnresponsivePushClientListener;
 import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.Bus;
 import dev.webfx.stack.push.ClientPushBusAddressesSharedByBothClientAndServer;
+
+import java.util.Collections;
+import java.util.List;
 
 /**
  * @author Bruno Salmon
@@ -18,6 +22,20 @@ public interface PushServerServiceProvider {
     }
 
     void clientIsLive(Object clientRunId);
+
+    /**
+     * Records invariant per-connection metadata (client build version + PWA mode) on an already-
+     * registered connected client, for the /monitor distributions. No-op when the client isn't
+     * registered yet (it will be re-supplied on the next live tick) — never creates an entry. Null
+     * values are ignored (kept as previously known).
+     */
+    default void setClientMetadata(Object clientRunId, String clientVersion, Boolean pwa) {
+    }
+
+    /** Snapshot of the currently-connected clients' invariant metadata, for the /monitor distributions. */
+    default List<PushClientMetadata> snapshotConnectedClients() {
+        return Collections.emptyList();
+    }
 
     /**
      * Returns the number of clients currently registered on this push server (i.e. clients the

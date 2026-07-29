@@ -18,6 +18,9 @@ public final class StateAccessor {
     private final static String USER_ID_ATTRIBUTE_NAME = "userId";
     private final static String RUN_ID_ATTRIBUTE_NAME = "runId";
     private final static String BACKOFFICE_ATTRIBUTE_NAME = "backoffice";
+    // Invariant per-connection client facts, sent once at (re)connection and kept in the server session.
+    private final static String CLIENT_VERSION_ATTRIBUTE_NAME = "clientVersion";
+    private final static String PWA_ATTRIBUTE_NAME = "pwa";
     private final static String SERVER_RUN_ID_ATTRIBUTE_NAME = "serverRunId";
     // Stamped on every server-emitted state envelope; clients drop any envelope without it.
     private final static String SERVER_ORIGIN_ATTRIBUTE_NAME = "serverOrigin";
@@ -125,6 +128,22 @@ public final class StateAccessor {
 
     public static Object setBackoffice(Object state, Boolean backoffice, boolean override) {
         return setStateAttribute(state, BACKOFFICE_ATTRIBUTE_NAME, backoffice, override);
+    }
+
+    public static String getClientVersion(Object state) {
+        return (String) getStateAttribute(state, CLIENT_VERSION_ATTRIBUTE_NAME);
+    }
+
+    public static Object setClientVersion(Object state, String clientVersion) {
+        return setStateAttribute(state, CLIENT_VERSION_ATTRIBUTE_NAME, clientVersion, true);
+    }
+
+    public static Boolean getPwa(Object state) {
+        return (Boolean) getStateAttribute(state, PWA_ATTRIBUTE_NAME);
+    }
+
+    public static Object setPwa(Object state, Boolean pwa) {
+        return setStateAttribute(state, PWA_ATTRIBUTE_NAME, pwa, true);
     }
 
     /** Get the server-generated run ID (unique per server process lifetime). */

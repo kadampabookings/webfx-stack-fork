@@ -14,7 +14,6 @@ import dev.webfx.stack.session.state.SessionAccessor;
 import dev.webfx.stack.session.state.StateAccessor;
 import dev.webfx.stack.session.state.server.ServerSideStateSessionSyncer;
 
-import java.util.function.Consumer;
 
 
 /**
@@ -86,9 +85,19 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
         setJsonRawMessageState(rawJsonMessage, headers, state);
     }
 
-    private static Consumer<Object> clientLiveListener;
+    /**
+     * Notified when a client is confirmed live, carrying its runId plus the invariant per-connection
+     * facts kept in the session (build version, PWA mode) — so the push layer can record them for the
+     * /monitor distributions without this module depending on it.
+     */
+    @FunctionalInterface
+    public interface ClientLiveListener {
+        void onClientLive(Object runId, String clientVersion, Boolean pwa);
+    }
 
-    public static void setClientLiveListener(Consumer<Object> clientLiveListener) {
+    private static ClientLiveListener clientLiveListener;
+
+    public static void setClientLiveListener(ClientLiveListener clientLiveListener) {
         ServerJsonBusStateManager.clientLiveListener = clientLiveListener;
     }
 
@@ -101,7 +110,10 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
                 runId = SessionAccessor.getRunId(session);
             }
             if (runId != null) {
-                clientLiveListener.accept(runId);
+                // Read the invariant client facts from the session (the client sent them once at
+                // connection). Re-supplied on every live tick so a push entry created after connect
+                // still picks them up.
+                clientLiveListener.onClientLive(runId, SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session));
                 return true; // to tell that we found the runId
             }
             Console.warn("ServerJsonBusStateManager.clientIsLive() was called but no runId could be found (session id = " + session.id() + ", ping = " + ping + ")");

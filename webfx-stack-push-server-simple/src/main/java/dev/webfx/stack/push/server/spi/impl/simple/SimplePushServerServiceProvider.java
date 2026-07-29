@@ -9,6 +9,7 @@ import dev.webfx.stack.com.bus.BusService;
 import dev.webfx.stack.com.bus.DeliveryOptions;
 import dev.webfx.stack.com.bus.call.BusCallService;
 import dev.webfx.stack.push.ClientPushBusAddressesSharedByBothClientAndServer;
+import dev.webfx.stack.push.server.PushClientMetadata;
 import dev.webfx.stack.push.server.UnresponsivePushClientListener;
 import dev.webfx.stack.push.server.spi.PushServerServiceProvider;
 
@@ -54,6 +55,27 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     }
 
     @Override
+    public void setClientMetadata(Object clientRunId, String clientVersion, Boolean pwa) {
+        // Attach to an already-registered client only; a not-yet-registered one gets it on a later
+        // live tick (the values are re-supplied from the session each time). Null = keep as known.
+        PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
+        if (pushClientInfo != null) {
+            if (clientVersion != null)
+                pushClientInfo.clientVersion = clientVersion;
+            if (pwa != null)
+                pushClientInfo.pwa = pwa;
+        }
+    }
+
+    @Override
+    public List<PushClientMetadata> snapshotConnectedClients() {
+        List<PushClientMetadata> snapshot = new ArrayList<>(pushClientInfos.size());
+        for (PushClientInfo info : pushClientInfos.values())
+            snapshot.add(new PushClientMetadata(info.clientVersion, info.pwa));
+        return snapshot;
+    }
+
+    @Override
     public int getPushClientsCount() {
         return pushClientInfos.size();
     }
@@ -89,6 +111,9 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         long lastCallTime;
         long lastResultReceivedTime;
         Scheduled pingScheduled;
+        // Invariant connection facts for the /monitor distributions (null until the client reports them).
+        String clientVersion;
+        Boolean pwa;
 
         PushClientInfo(Object clientRunId) {
             this.clientRunId = clientRunId;

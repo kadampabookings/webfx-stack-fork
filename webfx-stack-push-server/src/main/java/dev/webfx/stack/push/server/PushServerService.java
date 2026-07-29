@@ -6,6 +6,7 @@ import dev.webfx.stack.com.bus.Bus;
 import dev.webfx.platform.async.Future;
 import dev.webfx.platform.service.SingleServiceProvider;
 
+import java.util.List;
 import java.util.ServiceLoader;
 
 /**
@@ -35,6 +36,16 @@ public final class PushServerService {
 
     public static void clientIsLive(Object clientRunId) {
         getProvider().clientIsLive(clientRunId);
+    }
+
+    /** Records invariant connection metadata on a connected client for the /monitor distributions. */
+    public static void setClientMetadata(Object clientRunId, String clientVersion, Boolean pwa) {
+        getProvider().setClientMetadata(clientRunId, clientVersion, pwa);
+    }
+
+    /** Snapshot of currently-connected clients' invariant metadata, for the /monitor distributions. */
+    public static List<PushClientMetadata> snapshotConnectedClients() {
+        return getProvider().snapshotConnectedClients();
     }
 
     /**

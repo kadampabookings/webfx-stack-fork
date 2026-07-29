@@ -159,9 +159,13 @@ public final class ServerSideStateSessionSyncer {
         // serverSession.backoffice <= clientState.backoffice ? YES IF SET, as this means the client is communicating the client type, so we memorise that in the session
         Boolean backoffice = StateAccessor.getBackoffice(clientState);
         boolean backofficeChanged = SessionAccessor.changeBackoffice(serverSession, backoffice, true);
+        // serverSession.clientVersion / pwa <= clientState.* ? YES IF SET — invariant connection facts the
+        // client sends once at (re)connection; kept in the session (source of truth for the /monitor distributions).
+        boolean clientVersionChanged = SessionAccessor.changeClientVersion(serverSession, StateAccessor.getClientVersion(clientState), true);
+        boolean pwaChanged = SessionAccessor.changePwa(serverSession, StateAccessor.getPwa(clientState), true);
         // Since clients communicate the runId on first connection or reconnection, the sessionId must be synced in both cases (on reconnection, the session id may have changed)
         boolean sessionIdSyncedChanged = runId != null && SessionAccessor.changeServerSessionIdSynced(serverSession, false);
-        if (userIdChanged || runIdChanged || backofficeChanged || sessionIdSyncedChanged || forceStore)
+        if (userIdChanged || runIdChanged || backofficeChanged || clientVersionChanged || pwaChanged || sessionIdSyncedChanged || forceStore)
             return storeServerSession(serverSession);
         return Future.succeededFuture(serverSession);
     }
