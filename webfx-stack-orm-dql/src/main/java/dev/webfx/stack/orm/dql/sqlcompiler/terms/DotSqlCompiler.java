@@ -7,6 +7,7 @@ import dev.webfx.stack.orm.expression.terms.Alias;
 import dev.webfx.stack.orm.expression.terms.As;
 import dev.webfx.stack.orm.expression.terms.Dot;
 import dev.webfx.stack.orm.expression.terms.ExpressionArray;
+import dev.webfx.stack.orm.expression.terms.IdExpression;
 import dev.webfx.stack.orm.expression.terms.Symbol;
 import dev.webfx.stack.orm.expression.terms.function.ArgumentAlias;
 
@@ -39,6 +40,17 @@ public final class DotSqlCompiler extends AbstractTermSqlCompiler<Dot<?>> {
         final String leftSql;
         final String rightTableAlias;
         String leftSqlColumnName = o.modelReader.getSymbolSqlColumnName(leftClass, left);
+        // `fk.id` join prune: the referenced row's primary key IS the foreign-key column itself, so
+        // no join to the target table is needed — emit the FK column with the foreign-class mapping,
+        // exactly like a bare FK select compiles with readForeignFields=false. Also fixes
+        // `order by fk.id` silently dropping rows through the inner join on a nullable FK.
+        // Semantics note: `fk.id is null` now tests the FK column (true for null FKs) instead of the
+        // former never-true inner-join form, and dangling FKs (no referential integrity) are no
+        // longer filtered out — both changes in the direction of correctness.
+        if (leftSqlColumnName != null && asAlias == null && isIdTerm(dot.getRight())) {
+            o.build.addColumnInClause(leftTableAlias, leftSqlColumnName, left, rightClass, o.clause, o.separator, o.grouped, false, o.generateQueryMapping);
+            return;
+        }
         if (leftSqlColumnName != null) { // typically a persistent field
             leftSql = leftSqlColumnName;
             rightTableAlias = o.build.addJoinCondition(leftTableAlias, leftSql, asAlias, o.modelReader.getDomainClassSqlTableName(rightClass), o.modelReader.getDomainClassPrimaryKeySqlColumnName(rightClass), dot.isOuterJoin() || o.clause == SqlClause.SELECT);
@@ -67,6 +79,16 @@ public final class DotSqlCompiler extends AbstractTermSqlCompiler<Dot<?>> {
         o.build.setLeftJoinMapping(oldLeftJoinMapping);
         o.build.setCompilingClass(leftClass);
         o.build.setCompilingTableAlias(leftTableAlias);
+    }
+
+    /**
+     * True when the expression denotes the primary key: either the IdExpression itself, or the
+     * domain model's `id` field symbol (DomainClassBuilder wires that symbol's expression to
+     * IdExpression.singleton).
+     */
+    private static boolean isIdTerm(Expression<?> e) {
+        return e instanceof IdExpression
+            || e instanceof Symbol<?> symbol && symbol.getExpression() instanceof IdExpression;
     }
 
     @Override
