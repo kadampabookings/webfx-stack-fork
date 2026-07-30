@@ -8,14 +8,15 @@ import dev.webfx.stack.db.querypush.SystemResourceMonitorInfo;
 public final class SystemResourceMonitorInfoSerialCodec extends SerialCodecBase<SystemResourceMonitorInfo> {
 
     private static final String CODEC_ID = "SystemResourceMonitorInfo";
-    // CPU load is carried as a per-mille integer (0..1000, or -1 = unavailable): SerialCodecBase has
-    // no double primitive, and per-mille is ample precision for a CPU %.
-    private static final String CPU_PERMILLE_KEY = "cpuPermille";
-    private static final String PROCESSORS_KEY = "processors";
+    // Wire keys MUST match the client (@kbs3/shared) field names — the React client reads them by name
+    // off the decoded payload, with no remapping. CPU load is carried as a per-mille integer (0..1000,
+    // or -1 = unavailable): SerialCodecBase has no double primitive, and per-mille is ample for a CPU %.
+    private static final String CPU_PERMILLE_KEY = "processCpuPermille";
+    private static final String PROCESSORS_KEY = "availableProcessors";
     private static final String HEAP_USED_KEY = "heapUsed";
     private static final String HEAP_COMMITTED_KEY = "heapCommitted";
     private static final String HEAP_MAX_KEY = "heapMax";
-    private static final String OLD_GEN_AFTER_GC_KEY = "oldGenAfterGc";
+    private static final String OLD_GEN_AFTER_GC_KEY = "oldGenUsedAfterGc";
     private static final String GC_COUNT_KEY = "gcCount";
     private static final String GC_TIME_MILLIS_KEY = "gcTimeMillis";
 
