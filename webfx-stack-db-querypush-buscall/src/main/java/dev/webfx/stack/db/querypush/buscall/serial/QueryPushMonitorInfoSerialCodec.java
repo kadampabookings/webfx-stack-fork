@@ -24,6 +24,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String CLIENT_OSES_KEY = "clientOses";
     private static final String CLIENT_DEVICE_TYPES_KEY = "clientDeviceTypes";
     private static final String CLIENT_SIGN_IN_STATUSES_KEY = "clientSignInStatuses";
+    private static final String CLIENT_APPS_KEY = "clientApps";
     private static final String SYSTEM_RESOURCE_KEY = "systemResource";
 
     public QueryPushMonitorInfoSerialCodec() {
@@ -45,6 +46,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         encodeArray(  serial, CLIENT_OSES_KEY,            arg.getClientOses());
         encodeArray(  serial, CLIENT_DEVICE_TYPES_KEY,    arg.getClientDeviceTypes());
         encodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, arg.getClientSignInStatuses());
+        encodeArray(  serial, CLIENT_APPS_KEY,            arg.getClientApps());
     }
 
     @Override
@@ -61,6 +63,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
                 decodeArray(  serial, CLIENT_OSES_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_DEVICE_TYPES_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, NameCountInfo.class),
+                decodeArray(  serial, CLIENT_APPS_KEY, NameCountInfo.class),
                 (SystemResourceMonitorInfo) decodeObject(serial, SYSTEM_RESOURCE_KEY)
         );
     }

@@ -184,6 +184,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildProfileDistribution(connectedClients, PROFILE_OS),
             buildProfileDistribution(connectedClients, PROFILE_DEVICE),
             buildSignInStatusDistribution(connectedClients),
+            buildClientAppDistribution(connectedClients),
             buildSystemResourceInfo());
     }
 
@@ -467,6 +468,23 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     /** "anonymous" for a logged-out/absent user, else the userId principal's simple type name. */
     private static String signInStatusOf(Object userId) {
         return LogoutUserId.isLogoutUserIdOrNull(userId) ? SIGN_IN_ANONYMOUS : userId.getClass().getSimpleName();
+    }
+
+    /**
+     * Connected-clients breakdown by app: "bo" (back-office) vs "fo" (front-office). Only a back-office
+     * build sets the backoffice flag to TRUE; a front-office build leaves it null (it never sends
+     * false), so anything non-TRUE is front-office — the same reading as {@code ThreadLocalStateHolder
+     * .isBackoffice()} used elsewhere. Every connected client is one or the other, so there's no
+     * "unknown" bucket (a client that hasn't reported the flag yet is counted as front-office).
+     */
+    private static NameCountInfo[] buildClientAppDistribution(List<PushClientMetadata> connectedClients) {
+        // LinkedHashMap keeps a stable, meaningful order (bo, fo) for display.
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        counts.put("bo", 0);
+        counts.put("fo", 0);
+        for (PushClientMetadata c : connectedClients)
+            counts.merge(Boolean.TRUE.equals(c.getBackoffice()) ? "bo" : "fo", 1, Integer::sum);
+        return toNameCounts(counts);
     }
 
     private static NameCountInfo[] toNameCounts(Map<String, Integer> counts) {

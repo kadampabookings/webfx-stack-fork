@@ -23,12 +23,13 @@ public final class QueryPushMonitorInfo {
     private final NameCountInfo[] clientOses;           // connected-clients breakdown by OS (may be null on older servers)
     private final NameCountInfo[] clientDeviceTypes;    // connected-clients breakdown by device type: desktop/tablet/phone/unknown (may be null on older servers)
     private final NameCountInfo[] clientSignInStatuses; // connected-clients (per connection) breakdown by sign-in status: anonymous / principal type name (may be null on older servers)
+    private final NameCountInfo[] clientApps;           // connected-clients breakdown by app: bo (back-office) / fo (front-office) / unknown (may be null on older servers)
 
     public QueryPushMonitorInfo(int pushClientsCount, int subscribedUsersCount, QueryStreamMonitorInfo[] queryStreams,
                                 SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression,
                                 NameCountInfo[] clientVersions, NameCountInfo[] clientPwaModes,
                                 NameCountInfo[] clientBrowsers, NameCountInfo[] clientOses, NameCountInfo[] clientDeviceTypes,
-                                NameCountInfo[] clientSignInStatuses, SystemResourceMonitorInfo systemResource) {
+                                NameCountInfo[] clientSignInStatuses, NameCountInfo[] clientApps, SystemResourceMonitorInfo systemResource) {
         this.pushClientsCount = pushClientsCount;
         this.subscribedUsersCount = subscribedUsersCount;
         this.queryStreams = queryStreams;
@@ -40,6 +41,7 @@ public final class QueryPushMonitorInfo {
         this.clientOses = clientOses;
         this.clientDeviceTypes = clientDeviceTypes;
         this.clientSignInStatuses = clientSignInStatuses;
+        this.clientApps = clientApps;
         this.systemResource = systemResource;
     }
 
@@ -89,5 +91,9 @@ public final class QueryPushMonitorInfo {
 
     public NameCountInfo[] getClientSignInStatuses() {
         return clientSignInStatuses;
+    }
+
+    public NameCountInfo[] getClientApps() {
+        return clientApps;
     }
 }

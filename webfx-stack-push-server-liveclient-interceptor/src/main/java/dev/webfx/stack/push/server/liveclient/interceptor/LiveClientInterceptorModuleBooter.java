@@ -20,9 +20,9 @@ public class LiveClientInterceptorModuleBooter implements ApplicationModuleBoote
 
     @Override
     public void bootModule() {
-        ServerJsonBusStateManager.setClientLiveListener((runId, userId, clientVersion, pwa, clientProfile) -> {
+        ServerJsonBusStateManager.setClientLiveListener((runId, userId, clientVersion, pwa, clientProfile, backoffice) -> {
             PushServerService.clientIsLive(runId);
-            PushServerService.setClientMetadata(runId, userId, clientVersion, pwa, clientProfile);
+            PushServerService.setClientMetadata(runId, userId, clientVersion, pwa, clientProfile, backoffice);
         });
     }
 }

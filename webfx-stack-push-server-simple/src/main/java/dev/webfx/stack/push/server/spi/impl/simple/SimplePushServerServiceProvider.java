@@ -58,20 +58,22 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     }
 
     @Override
-    public void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa, String clientProfile) {
+    public void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa, String clientProfile, Boolean backoffice) {
         // Attach to an already-registered client only; a not-yet-registered one gets it on a later
         // live tick (the values are re-supplied from the session each time).
         PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
         if (pushClientInfo != null) {
             // userId reflects the current login — store it as-is each tick (it changes on login/logout).
             pushClientInfo.userId = userId;
-            // version/pwa/profile are invariant; keep the last known value if a tick supplies null.
+            // version/pwa/profile/backoffice are invariant; keep the last known value if a tick supplies null.
             if (clientVersion != null)
                 pushClientInfo.clientVersion = clientVersion;
             if (pwa != null)
                 pushClientInfo.pwa = pwa;
             if (clientProfile != null)
                 pushClientInfo.clientProfile = clientProfile;
+            if (backoffice != null)
+                pushClientInfo.backoffice = backoffice;
         }
     }
 
@@ -79,7 +81,7 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     public List<PushClientMetadata> snapshotConnectedClients() {
         List<PushClientMetadata> snapshot = new ArrayList<>(pushClientInfos.size());
         for (PushClientInfo info : pushClientInfos.values())
-            snapshot.add(new PushClientMetadata(info.userId, info.clientVersion, info.pwa, info.clientProfile));
+            snapshot.add(new PushClientMetadata(info.userId, info.clientVersion, info.pwa, info.clientProfile, info.backoffice));
         return snapshot;
     }
 
@@ -120,11 +122,12 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         long lastResultReceivedTime;
         Scheduled pingScheduled;
         // Session facts for the /monitor page. userId = the current login (updated each live tick);
-        // clientVersion/pwa/clientProfile are invariant (null until the client reports them).
+        // clientVersion/pwa/clientProfile/backoffice are invariant (null until the client reports them).
         Object userId;
         String clientVersion;
         Boolean pwa;
         String clientProfile;
+        Boolean backoffice; // TRUE = back-office app, FALSE = front-office app, null = unknown
 
         PushClientInfo(Object clientRunId) {
             this.clientRunId = clientRunId;
