@@ -15,6 +15,7 @@ module webfx.stack.db.querypush.server {
     requires webfx.stack.db.querypush.buscall;
     requires webfx.stack.db.submit;
     requires webfx.stack.db.submit.listener;
+    requires webfx.stack.orm.datasourcemodel.service;
     requires webfx.stack.push.server;
     requires webfx.stack.session.state;
 

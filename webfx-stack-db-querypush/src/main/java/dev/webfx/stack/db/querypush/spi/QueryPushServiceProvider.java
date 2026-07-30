@@ -1,5 +1,6 @@
 package dev.webfx.stack.db.querypush.spi;
 
+import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
@@ -25,6 +26,15 @@ public interface QueryPushServiceProvider {
      * forgets to delegate is a compile error rather than a silent null at runtime.
      */
     QueryPushMonitorInfo getMonitorInfo();
+
+    /**
+     * Read-only database health snapshot (connections + non-idle/long-running/blocking queries) for
+     * the /monitor "Database" drill-down, fetched on demand (queries {@code pg_stat_activity}). Fails
+     * the future when not available (client-side providers, or a caller that isn't a logged-in user).
+     * <p>
+     * Deliberately NOT defaulted (like {@link #getMonitorInfo()}) so decorators must delegate.
+     */
+    Future<DatabaseHealthMonitorInfo> getDatabaseHealthInfo();
 
     /**
      * Requests best-effort cancellation of an in-flight SQL query by its monitor id (as reported

@@ -32,6 +32,14 @@ public final class QueryPushService {
     }
 
     /**
+     * Returns the read-only database health snapshot (see
+     * {@link QueryPushServiceProvider#getDatabaseHealthInfo()}); the future fails when not available.
+     */
+    public static Future<DatabaseHealthMonitorInfo> getDatabaseHealthInfo() {
+        return getProvider().getDatabaseHealthInfo();
+    }
+
+    /**
      * Requests best-effort cancellation of an in-flight SQL query by its monitor id (see
      * {@link QueryPushServiceProvider#cancelSqlQuery(long)}). Returns TRUE if dispatched, FALSE if
      * unknown / already finished, or null when not available.

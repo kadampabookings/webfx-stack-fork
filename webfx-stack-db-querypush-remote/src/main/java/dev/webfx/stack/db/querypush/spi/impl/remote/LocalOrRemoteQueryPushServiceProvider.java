@@ -4,6 +4,7 @@ import dev.webfx.platform.console.Console;
 import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.call.BusCallService;
 import dev.webfx.stack.db.datasource.LocalDataSource;
+import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryPushResult;
@@ -46,6 +47,13 @@ public class LocalOrRemoteQueryPushServiceProvider implements QueryPushServicePr
         // dedicated buscall endpoint (service/querypush/getMonitorInfo), not through this API,
         // so there is no local snapshot to return here.
         return null;
+    }
+
+    @Override
+    public Future<DatabaseHealthMonitorInfo> getDatabaseHealthInfo() {
+        // Client-side provider: the database health snapshot is fetched from the server via the
+        // dedicated buscall endpoint (service/querypush/getDatabaseHealthInfo), not through this API.
+        return Future.failedFuture(new UnsupportedOperationException("getDatabaseHealthInfo() is not available on the client-side provider"));
     }
 
     @Override

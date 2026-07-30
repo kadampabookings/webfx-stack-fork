@@ -1,4 +1,6 @@
+dev.webfx.stack.db.querypush.buscall.serial.ActiveDbQueryInfoSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.CompressionMonitorInfoSerialCodec
+dev.webfx.stack.db.querypush.buscall.serial.DatabaseHealthMonitorInfoSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.NameCountInfoSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.QueryPushArgumentSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.QueryPushMonitorInfoSerialCodec

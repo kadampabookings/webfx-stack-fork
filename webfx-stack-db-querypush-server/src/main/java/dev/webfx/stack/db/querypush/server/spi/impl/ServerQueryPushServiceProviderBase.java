@@ -11,7 +11,10 @@ import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
 import dev.webfx.stack.db.query.SqlAnalyzeRegistry;
 import dev.webfx.stack.db.query.SqlExecutionMonitor;
+import dev.webfx.platform.util.Numbers;
+import dev.webfx.stack.db.querypush.ActiveDbQueryInfo;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
+import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
 import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
@@ -27,6 +30,7 @@ import dev.webfx.stack.db.querypush.SystemResourceMonitorInfo;
 import dev.webfx.stack.db.querypush.diff.QueryResultComparator;
 import dev.webfx.stack.db.querypush.diff.QueryResultDiff;
 import dev.webfx.stack.db.querypush.server.QueryPushServerService;
+import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.push.server.PushClientMetadata;
 import dev.webfx.stack.push.server.PushServerService;
@@ -280,6 +284,82 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     /** Worst event-loop lag since the previous call, then resets; -1 if the probe hasn't ticked yet. */
     private static long takeEventLoopLagMillis() {
         return EVENT_LOOP_LAG_MAX_MILLIS.getAndSet(-1);
+    }
+
+    // ---- Database health (on-demand; queries pg_stat_activity, kept off the regular monitor poll) ----
+
+    // Connection counts + max_connections in one row.
+    private static final String DB_CONNECTIONS_SQL =
+        "select (select setting::int from pg_settings where name='max_connections') as max_conn," +
+        " count(*)::int as total," +
+        " count(*) filter (where state='active')::int as active," +
+        " count(*) filter (where state='idle')::int as idle" +
+        " from pg_stat_activity";
+
+    // Non-idle backends (long-running / blocking) across all clients, worst-first, capped. Excludes
+    // this monitoring query itself (pg_backend_pid).
+    private static final String DB_ACTIVE_QUERIES_SQL =
+        "select pid," +
+        " (extract(epoch from (now() - query_start)) * 1000)::bigint as duration_ms," +
+        " state," +
+        " wait_event_type as wait," +
+        " coalesce((pg_blocking_pids(pid))[1], 0) as blocked_by," +
+        " left(query, 500) as query" +
+        " from pg_stat_activity" +
+        " where state is not null and state <> 'idle' and pid <> pg_backend_pid()" +
+        " order by duration_ms desc nulls last" +
+        " limit 50";
+
+    @Override
+    public Future<DatabaseHealthMonitorInfo> getDatabaseHealthInfo() {
+        // Same gate as getMonitorInfo — a read-only DB snapshot reserved for logged-in back-office callers.
+        Object callerUserId = ThreadLocalStateHolder.getUserId();
+        if (LogoutUserId.isLogoutUserIdOrNull(callerUserId)) {
+            Console.log("[Monitor] getDatabaseHealthInfo denied — no logged-in caller (userId=" + callerUserId + ")");
+            return Future.failedFuture(new IllegalStateException("Database health info is not available"));
+        }
+        Object dataSourceId = DataSourceModelService.getDefaultDataSourceId();
+        Future<QueryResult> connectionsFuture = QueryService.executeQuery(rawSqlQuery(dataSourceId, DB_CONNECTIONS_SQL));
+        Future<QueryResult> activityFuture = QueryService.executeQuery(rawSqlQuery(dataSourceId, DB_ACTIVE_QUERIES_SQL));
+        return Future.all(connectionsFuture, activityFuture)
+            .map(cf -> buildDatabaseHealthInfo(cf.resultAt(0), cf.resultAt(1)));
+    }
+
+    /** A raw-SQL read query: language is null (not "DQL") so it bypasses DQL compilation; sendMetadata=true so columns come back by name. */
+    private static QueryArgument rawSqlQuery(Object dataSourceId, String sql) {
+        return new QueryArgument(null, dataSourceId, null, null, sql, null, null, true, false);
+    }
+
+    // Column indices, in SELECT order — a raw-SQL QueryResult carries values but no columnNames, so
+    // we read by position, not by name.
+    // DB_CONNECTIONS_SQL: max_conn, total, active, idle
+    private static final int CONN_MAX = 0, CONN_TOTAL = 1, CONN_ACTIVE = 2, CONN_IDLE = 3;
+    // DB_ACTIVE_QUERIES_SQL: pid, duration_ms, state, wait, blocked_by, query
+    private static final int Q_PID = 0, Q_DURATION = 1, Q_STATE = 2, Q_WAIT = 3, Q_BLOCKED_BY = 4, Q_QUERY = 5;
+
+    private static DatabaseHealthMonitorInfo buildDatabaseHealthInfo(QueryResult connections, QueryResult activity) {
+        boolean hasConn = connections != null && connections.getRowCount() > 0;
+        int maxConn = hasConn ? connections.getInt(0, CONN_MAX, -1) : -1;
+        int total = hasConn ? connections.getInt(0, CONN_TOTAL, 0) : 0;
+        int active = hasConn ? connections.getInt(0, CONN_ACTIVE, 0) : 0;
+        int idle = hasConn ? connections.getInt(0, CONN_IDLE, 0) : 0;
+        int rows = activity == null ? 0 : activity.getRowCount();
+        ActiveDbQueryInfo[] queries = new ActiveDbQueryInfo[rows];
+        for (int r = 0; r < rows; r++) {
+            queries[r] = new ActiveDbQueryInfo(
+                activity.getInt(r, Q_PID, 0),
+                Numbers.longValue(activity.getValue(r, Q_DURATION)),
+                stringOf(activity.getValue(r, Q_STATE)),
+                stringOf(activity.getValue(r, Q_WAIT)),
+                activity.getInt(r, Q_BLOCKED_BY, 0),
+                stringOf(activity.getValue(r, Q_QUERY)));
+        }
+        return new DatabaseHealthMonitorInfo(maxConn, total, active, idle, queries);
+    }
+
+    /** Null-safe toString for a raw QueryResult cell (text columns come back as String, but be defensive). */
+    private static String stringOf(Object value) {
+        return value == null ? null : value.toString();
     }
 
     /** Whether a memory-pool name denotes the tenured/old generation (collector-independent). */

@@ -9,6 +9,7 @@ import dev.webfx.stack.db.datascope.schema.SchemaScope;
 import dev.webfx.stack.db.datascope.schema.SchemaScopeBuilder;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
 import dev.webfx.stack.db.query.QueryArgument;
+import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
@@ -49,6 +50,12 @@ public class DqlQueryPushInterceptorInitializer implements ApplicationJob {
                         // interceptor only rewrites the query scope on executeQueryPush; without
                         // this delegation the call would fall through to the SPI default = null).
                         return targetProvider.getMonitorInfo();
+                    }
+
+                    @Override
+                    public Future<DatabaseHealthMonitorInfo> getDatabaseHealthInfo() {
+                        // Delegate the DB health snapshot too — this interceptor only touches executeQueryPush.
+                        return targetProvider.getDatabaseHealthInfo();
                     }
 
                     @Override
