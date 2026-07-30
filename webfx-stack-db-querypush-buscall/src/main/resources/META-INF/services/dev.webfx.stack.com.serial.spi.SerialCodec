@@ -10,3 +10,4 @@ dev.webfx.stack.db.querypush.buscall.serial.SqlAnalyzeResultInfoSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.SqlExecutionMonitorInfoSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.SqlKindMonitorInfoSerialCodec
 dev.webfx.stack.db.querypush.buscall.serial.StatementMonitorInfoSerialCodec
+dev.webfx.stack.db.querypush.buscall.serial.SystemResourceMonitorInfoSerialCodec

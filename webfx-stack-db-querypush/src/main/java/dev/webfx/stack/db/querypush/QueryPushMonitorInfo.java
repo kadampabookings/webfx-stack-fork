@@ -16,6 +16,7 @@ public final class QueryPushMonitorInfo {
     private final QueryStreamMonitorInfo[] queryStreams;
     private final SqlExecutionMonitorInfo sqlExecution; // read/write SQL execution metrics (may be null on older servers)
     private final CompressionMonitorInfo compression;   // QueryResult compression metrics (may be null on older servers)
+    private final SystemResourceMonitorInfo systemResource; // JVM CPU + heap-memory metrics (may be null on older servers)
     private final NameCountInfo[] clientVersions;       // connected-clients breakdown by build version (may be null on older servers)
     private final NameCountInfo[] clientPwaModes;       // connected-clients breakdown by PWA mode: installed/browser/unknown (may be null on older servers)
     private final NameCountInfo[] clientBrowsers;       // connected-clients breakdown by browser (may be null on older servers)
@@ -27,7 +28,7 @@ public final class QueryPushMonitorInfo {
                                 SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression,
                                 NameCountInfo[] clientVersions, NameCountInfo[] clientPwaModes,
                                 NameCountInfo[] clientBrowsers, NameCountInfo[] clientOses, NameCountInfo[] clientDeviceTypes,
-                                NameCountInfo[] clientSignInStatuses) {
+                                NameCountInfo[] clientSignInStatuses, SystemResourceMonitorInfo systemResource) {
         this.pushClientsCount = pushClientsCount;
         this.subscribedUsersCount = subscribedUsersCount;
         this.queryStreams = queryStreams;
@@ -39,6 +40,7 @@ public final class QueryPushMonitorInfo {
         this.clientOses = clientOses;
         this.clientDeviceTypes = clientDeviceTypes;
         this.clientSignInStatuses = clientSignInStatuses;
+        this.systemResource = systemResource;
     }
 
     public int getPushClientsCount() {
@@ -59,6 +61,10 @@ public final class QueryPushMonitorInfo {
 
     public CompressionMonitorInfo getCompression() {
         return compression;
+    }
+
+    public SystemResourceMonitorInfo getSystemResource() {
+        return systemResource;
     }
 
     public NameCountInfo[] getClientVersions() {

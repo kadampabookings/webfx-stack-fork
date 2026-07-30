@@ -8,6 +8,7 @@ import dev.webfx.stack.db.querypush.NameCountInfo;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
+import dev.webfx.stack.db.querypush.SystemResourceMonitorInfo;
 
 public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<QueryPushMonitorInfo> {
 
@@ -23,6 +24,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String CLIENT_OSES_KEY = "clientOses";
     private static final String CLIENT_DEVICE_TYPES_KEY = "clientDeviceTypes";
     private static final String CLIENT_SIGN_IN_STATUSES_KEY = "clientSignInStatuses";
+    private static final String SYSTEM_RESOURCE_KEY = "systemResource";
 
     public QueryPushMonitorInfoSerialCodec() {
         super(QueryPushMonitorInfo.class, CODEC_ID);
@@ -36,6 +38,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         // Null on older servers — encodeObject skips nulls, decodeObject returns null.
         encodeObject( serial, SQL_EXECUTION_KEY,          arg.getSqlExecution());
         encodeObject( serial, COMPRESSION_KEY,            arg.getCompression());
+        encodeObject( serial, SYSTEM_RESOURCE_KEY,        arg.getSystemResource());
         encodeArray(  serial, CLIENT_VERSIONS_KEY,        arg.getClientVersions());
         encodeArray(  serial, CLIENT_PWA_MODES_KEY,       arg.getClientPwaModes());
         encodeArray(  serial, CLIENT_BROWSERS_KEY,        arg.getClientBrowsers());
@@ -57,7 +60,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
                 decodeArray(  serial, CLIENT_BROWSERS_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_OSES_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_DEVICE_TYPES_KEY, NameCountInfo.class),
-                decodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, NameCountInfo.class)
+                decodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, NameCountInfo.class),
+                (SystemResourceMonitorInfo) decodeObject(serial, SYSTEM_RESOURCE_KEY)
         );
     }
 

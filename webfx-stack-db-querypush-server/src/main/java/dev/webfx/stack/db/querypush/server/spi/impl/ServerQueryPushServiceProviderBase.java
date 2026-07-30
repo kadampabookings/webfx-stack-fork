@@ -23,6 +23,7 @@ import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlKindMonitorInfo;
 import dev.webfx.stack.db.querypush.StatementMonitorInfo;
+import dev.webfx.stack.db.querypush.SystemResourceMonitorInfo;
 import dev.webfx.stack.db.querypush.diff.QueryResultComparator;
 import dev.webfx.stack.db.querypush.diff.QueryResultDiff;
 import dev.webfx.stack.db.querypush.server.QueryPushServerService;
@@ -41,6 +42,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+
+import com.sun.management.OperatingSystemMXBean;
+
+import java.lang.management.GarbageCollectorMXBean;
+import java.lang.management.ManagementFactory;
+import java.lang.management.MemoryPoolMXBean;
+import java.lang.management.MemoryType;
+import java.lang.management.MemoryUsage;
 
 /**
  * @author Bruno Salmon
@@ -168,7 +177,68 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildProfileDistribution(connectedClients, PROFILE_BROWSER),
             buildProfileDistribution(connectedClients, PROFILE_OS),
             buildProfileDistribution(connectedClients, PROFILE_DEVICE),
-            buildSignInStatusDistribution(connectedClients));
+            buildSignInStatusDistribution(connectedClients),
+            buildSystemResourceInfo());
+    }
+
+    /**
+     * JVM CPU + heap-memory snapshot for the /monitor page, from the standard management beans.
+     * Defensive: any bean unavailability is swallowed to a safe default (never fails getMonitorInfo).
+     */
+    private static SystemResourceMonitorInfo buildSystemResourceInfo() {
+        // CPU: fraction of CPU used by THIS JVM process, normalised by the (container-aware) processor
+        // count. -1 (or NaN) means "not yet available" — the very first sample after start.
+        double cpuLoad = -1;
+        try {
+            OperatingSystemMXBean os = ManagementFactory.getPlatformMXBean(OperatingSystemMXBean.class);
+            if (os != null) {
+                cpuLoad = os.getProcessCpuLoad();
+                if (Double.isNaN(cpuLoad))
+                    cpuLoad = -1;
+            }
+        } catch (Throwable ignored) { /* keep -1 */ }
+        int processors = Runtime.getRuntime().availableProcessors();
+
+        // Heap: used / committed / max (max reflects -Xmx or the default MaxRAMPercentage of the cgroup limit).
+        long heapUsed = 0, heapCommitted = 0, heapMax = -1;
+        try {
+            MemoryUsage heap = ManagementFactory.getMemoryMXBean().getHeapMemoryUsage();
+            heapUsed = heap.getUsed();
+            heapCommitted = heap.getCommitted();
+            heapMax = heap.getMax();
+        } catch (Throwable ignored) { /* keep defaults */ }
+
+        // Retained data signal: old-gen occupancy AFTER the last collection (live set, sawtooth removed).
+        long oldGenAfterGc = -1;
+        try {
+            for (MemoryPoolMXBean pool : ManagementFactory.getMemoryPoolMXBeans()) {
+                if (pool.getType() == MemoryType.HEAP && isOldGenPool(pool.getName())) {
+                    MemoryUsage afterGc = pool.getCollectionUsage(); // null if the pool doesn't track it
+                    if (afterGc != null)
+                        oldGenAfterGc = afterGc.getUsed();
+                }
+            }
+        } catch (Throwable ignored) { /* keep -1 */ }
+
+        // GC pressure: cumulative collection count + time across all collectors (client derives a rate).
+        long gcCount = 0, gcTimeMillis = 0;
+        try {
+            for (GarbageCollectorMXBean gc : ManagementFactory.getGarbageCollectorMXBeans()) {
+                long c = gc.getCollectionCount();
+                if (c > 0)
+                    gcCount += c;
+                long t = gc.getCollectionTime();
+                if (t > 0)
+                    gcTimeMillis += t;
+            }
+        } catch (Throwable ignored) { /* keep 0 */ }
+
+        return new SystemResourceMonitorInfo(cpuLoad, processors, heapUsed, heapCommitted, heapMax, oldGenAfterGc, gcCount, gcTimeMillis);
+    }
+
+    /** Whether a memory-pool name denotes the tenured/old generation (collector-independent). */
+    private static boolean isOldGenPool(String poolName) {
+        return poolName != null && (poolName.contains("Old") || poolName.contains("Tenured"));
     }
 
     /** Placeholder bucket name for a connected client that hasn't reported the fact yet (older client). */
