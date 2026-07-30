@@ -250,7 +250,23 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         long eventLoopLagMillis = takeEventLoopLagMillis();
 
         return new SystemResourceMonitorInfo(cpuLoad, processors, heapUsed, heapCommitted, heapMax,
-            oldGenAfterGc, gcCount, gcTimeMillis, uptimeMillis, eventLoopLagMillis);
+            oldGenAfterGc, gcCount, gcTimeMillis, uptimeMillis, eventLoopLagMillis, SERVER_VERSION);
+    }
+
+    /**
+     * Server build version — the shared APP_BUILD_TIMESTAMP baked into this deploy (same string as the
+     * React clients built in the same CI workflow), read once from the container env. Null when unset
+     * (e.g. a local dev run), so the /monitor Uptime card just omits the version there.
+     */
+    private static final String SERVER_VERSION = readServerVersion();
+
+    private static String readServerVersion() {
+        try {
+            String v = System.getenv("APP_BUILD_TIMESTAMP");
+            return v == null || v.isEmpty() ? null : v;
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     // ---- Vert.x event-loop lag probe ----------------------------------------------------------------

@@ -38,11 +38,15 @@ public final class SystemResourceMonitorInfo {
     // Worst Vert.x event-loop scheduling lag (ms) observed since the previous /monitor poll; -1 if not
     // measured yet. A blocked event loop stalls ALL clients while CPU can still look low.
     private final long eventLoopLagMillis;
+    // Server build version — the shared APP_BUILD_TIMESTAMP baked into this deploy (same string as the
+    // React clients built in the same workflow), so it matches the clients' "By version" buckets. Null
+    // when not set (e.g. a local dev run with no shared version).
+    private final String serverVersion;
 
     public SystemResourceMonitorInfo(double processCpuLoad, int availableProcessors,
                                      long heapUsed, long heapCommitted, long heapMax,
                                      long oldGenUsedAfterGc, long gcCount, long gcTimeMillis,
-                                     long uptimeMillis, long eventLoopLagMillis) {
+                                     long uptimeMillis, long eventLoopLagMillis, String serverVersion) {
         this.processCpuLoad = processCpuLoad;
         this.availableProcessors = availableProcessors;
         this.heapUsed = heapUsed;
@@ -53,6 +57,7 @@ public final class SystemResourceMonitorInfo {
         this.gcTimeMillis = gcTimeMillis;
         this.uptimeMillis = uptimeMillis;
         this.eventLoopLagMillis = eventLoopLagMillis;
+        this.serverVersion = serverVersion;
     }
 
     public double getProcessCpuLoad() { return processCpuLoad; }
@@ -65,4 +70,6 @@ public final class SystemResourceMonitorInfo {
     public long getGcTimeMillis() { return gcTimeMillis; }
     public long getUptimeMillis() { return uptimeMillis; }
     public long getEventLoopLagMillis() { return eventLoopLagMillis; }
+    /** Server build version (shared APP_BUILD_TIMESTAMP), or null when unset (local dev). */
+    public String getServerVersion() { return serverVersion; }
 }
