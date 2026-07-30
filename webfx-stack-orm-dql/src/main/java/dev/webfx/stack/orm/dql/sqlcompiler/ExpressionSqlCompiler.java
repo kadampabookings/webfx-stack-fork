@@ -95,7 +95,10 @@ public final class ExpressionSqlCompiler {
             String cteAlias = (String) cte[0];
             Select<?> cteSelect = (Select<?>) cte[1];
             SqlCompiled cteCompiled = compileSelect(cteSelect, dbmsSyntax, false, false, false, modelReader);
-            withPrefix.append(cteAlias).append(" as (").append(cteCompiled.getSql()).append(")");
+            // AS MATERIALIZED forces Postgres to compute the CTE once: PG12+ inlines
+            // single-reference CTEs by default, re-executing the body inside any correlated
+            // subquery that references it (which defeats a precomputation CTE entirely).
+            withPrefix.append(cteAlias).append(cte.length > 2 && Boolean.TRUE.equals(cte[2]) ? " as materialized (" : " as (").append(cteCompiled.getSql()).append(")");
             // Merge parameter names (preserving order, deduplicating)
             for (String param : cteCompiled.getParameterNames())
                 if (!allParamNames.contains(param))

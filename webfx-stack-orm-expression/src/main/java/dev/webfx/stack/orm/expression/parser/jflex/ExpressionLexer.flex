@@ -81,6 +81,7 @@ OrderBy = [Oo][Rr][Dd][Ee][Rr]{WhiteSpace}+[Bb][Yy]
     "delete"                       { return symbol(DELETE); }
     "set"                          { return symbol(SET); }
     "with"                         { return symbol(WITH); }
+    "materialized"                 { return symbol(MATERIALIZED); }
     "union"                        { return symbol(UNION); }
     "exists"                       { return symbol(EXISTS); }
     "lateral"                      { return symbol(LATERAL); }
