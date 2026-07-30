@@ -217,6 +217,11 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // The original DQL this SQL was compiled from (server-side only, via the transient
         // original-argument chain the DQL interceptor sets); null when the query wasn't DQL-derived.
         String dql = dqlStatementOf(argument);
+        // The client build version of the caller that ran THIS occurrence — read now (the thread-local
+        // caller state won't survive the async EXPLAIN below). Null for an older client or a
+        // server-internal run (e.g. a push refresh with no client caller). Lets the admin tell whether
+        // a still-slow query is coming from an old client (temporary, until rollout) or the latest one.
+        String clientVersion = ThreadLocalStateHolder.getClientVersion();
         withConnection(pool, c -> c.preparedQuery("EXPLAIN (ANALYZE, BUFFERS) " + statement).execute(tupleFromArguments(parameters)))
             .onComplete(ar -> {
                 String plan;
@@ -229,7 +234,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                     plan = "EXPLAIN failed: " + ar.cause();
                     log("⚠️ WARNING: analyze EXPLAIN failed for statement: " + statement + " — " + ar.cause());
                 }
-                registry.storeResult(statement, dql, parametersDisplay, plan, System.currentTimeMillis());
+                registry.storeResult(statement, dql, parametersDisplay, plan, clientVersion, System.currentTimeMillis());
             });
     }
 

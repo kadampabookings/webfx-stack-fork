@@ -79,7 +79,7 @@ public final class SqlAnalyzeRegistry {
             return false; // not armed — don't capture
         }
         armedCount = armedAt.size();
-        results.put(statement, new Result(statement, Status.PENDING, null, null, null, nowMillis));
+        results.put(statement, new Result(statement, Status.PENDING, null, null, null, null, nowMillis));
         return true;
     }
 
@@ -87,10 +87,10 @@ public final class SqlAnalyzeRegistry {
      * Stores the captured EXPLAIN plan for a claimed statement, along with the parameters used and
      * the original DQL statement it was compiled from (null when the SQL wasn't DQL-derived).
      */
-    public synchronized void storeResult(String statement, String dqlStatement, String parametersDisplay, String planText, long nowMillis) {
+    public synchronized void storeResult(String statement, String dqlStatement, String parametersDisplay, String planText, String clientVersion, long nowMillis) {
         if (results.size() >= MAX_RESULTS && !results.containsKey(statement))
             evictOldestResult();
-        results.put(statement, new Result(statement, Status.READY, dqlStatement, parametersDisplay, planText, nowMillis));
+        results.put(statement, new Result(statement, Status.READY, dqlStatement, parametersDisplay, planText, clientVersion, nowMillis));
     }
 
     /** Current analyze state for a statement: READY (plan), PENDING (armed/capturing) or NONE. */
@@ -99,7 +99,7 @@ public final class SqlAnalyzeRegistry {
         if (r != null)
             return r;
         if (armedAt.containsKey(statement))
-            return new Result(statement, Status.PENDING, null, null, null, armedAt.get(statement));
+            return new Result(statement, Status.PENDING, null, null, null, null, armedAt.get(statement));
         return NONE;
     }
 
@@ -127,7 +127,7 @@ public final class SqlAnalyzeRegistry {
         all.addAll(results.values());
         for (Map.Entry<String, Long> e : armedAt.entrySet())
             if (!results.containsKey(e.getKey()))
-                all.add(new Result(e.getKey(), Status.PENDING, null, null, null, e.getValue()));
+                all.add(new Result(e.getKey(), Status.PENDING, null, null, null, null, e.getValue()));
         return all;
     }
 
@@ -155,7 +155,7 @@ public final class SqlAnalyzeRegistry {
             armedAt.remove(oldest);
     }
 
-    private static final Result NONE = new Result(null, Status.NONE, null, null, null, 0);
+    private static final Result NONE = new Result(null, Status.NONE, null, null, null, null, 0);
 
     /**
      * Immutable analyze state for one {@code statement}. PENDING while waiting for the next occurrence
@@ -169,14 +169,16 @@ public final class SqlAnalyzeRegistry {
         public final String dqlStatement;      // original DQL, null unless READY and DQL-derived
         public final String parametersDisplay; // null unless READY
         public final String planText;          // null unless READY
+        public final String clientVersion;     // client build version that ran the captured occurrence; null unless READY (and known)
         public final long atMillis;            // capture time (READY) or arm time (PENDING) — for age + oldest-eviction
 
-        Result(String statement, Status status, String dqlStatement, String parametersDisplay, String planText, long atMillis) {
+        Result(String statement, Status status, String dqlStatement, String parametersDisplay, String planText, String clientVersion, long atMillis) {
             this.statement = statement;
             this.status = status;
             this.dqlStatement = dqlStatement;
             this.parametersDisplay = parametersDisplay;
             this.planText = planText;
+            this.clientVersion = clientVersion;
             this.atMillis = atMillis;
         }
     }

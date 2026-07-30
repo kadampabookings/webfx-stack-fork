@@ -60,6 +60,11 @@ public final class ThreadLocalStateHolder implements AutoCloseable {
         return StateAccessor.getBackoffice(getThreadLocalState());
     }
 
+    /** The caller's invariant client build version, or null (older client, or a server-internal call). */
+    public static String getClientVersion() {
+        return StateAccessor.getClientVersion(getThreadLocalState());
+    }
+
     public static boolean isBackoffice() { // returns false if not specified
         return Boolean.TRUE.equals(getBackoffice());
     }

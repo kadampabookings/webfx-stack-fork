@@ -530,11 +530,11 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     private static SqlAnalyzeResultInfo toAnalyzeInfo(SqlAnalyzeRegistry.Result r, long now) {
         switch (r.status) {
             case READY:
-                return new SqlAnalyzeResultInfo(r.statement, "ready", r.planText, r.dqlStatement, r.parametersDisplay, Math.max(0, now - r.atMillis));
+                return new SqlAnalyzeResultInfo(r.statement, "ready", r.planText, r.dqlStatement, r.parametersDisplay, Math.max(0, now - r.atMillis), r.clientVersion);
             case PENDING:
-                return new SqlAnalyzeResultInfo(r.statement, "pending", null, null, null, -1);
+                return new SqlAnalyzeResultInfo(r.statement, "pending", null, null, null, -1, null);
             default:
-                return new SqlAnalyzeResultInfo(r.statement, "none", null, null, null, -1);
+                return new SqlAnalyzeResultInfo(r.statement, "none", null, null, null, -1, null);
         }
     }
 

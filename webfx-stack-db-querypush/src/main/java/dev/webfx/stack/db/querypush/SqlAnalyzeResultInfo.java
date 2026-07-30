@@ -21,14 +21,16 @@ public final class SqlAnalyzeResultInfo {
     private final String dql;               // original DQL, null unless ready and DQL-derived
     private final String parameters;        // display of the captured parameters, may be null
     private final long capturedAgeMillis;   // ms since capture when ready, else -1
+    private final String clientVersion;     // client build version that ran the captured occurrence, null when unknown
 
-    public SqlAnalyzeResultInfo(String statement, String status, String plan, String dql, String parameters, long capturedAgeMillis) {
+    public SqlAnalyzeResultInfo(String statement, String status, String plan, String dql, String parameters, long capturedAgeMillis, String clientVersion) {
         this.statement = statement;
         this.status = status;
         this.plan = plan;
         this.dql = dql;
         this.parameters = parameters;
         this.capturedAgeMillis = capturedAgeMillis;
+        this.clientVersion = clientVersion;
     }
 
     public String getStatement() { return statement; }
@@ -37,4 +39,6 @@ public final class SqlAnalyzeResultInfo {
     public String getDql() { return dql; }
     public String getParameters() { return parameters; }
     public long getCapturedAgeMillis() { return capturedAgeMillis; }
+    /** Client build version that ran the captured occurrence (READY only), or null when unknown. */
+    public String getClientVersion() { return clientVersion; }
 }

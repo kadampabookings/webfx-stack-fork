@@ -180,6 +180,10 @@ public final class ServerSideStateSessionSyncer {
         clientState = StateAccessor.setRunId(clientState, SessionAccessor.getRunId(serverSession), false);
         // clientState.backoffice <= serverSession.backoffice ? YES IF NOT SET, otherwise this means the client communicates it, so we keep that info
         clientState = StateAccessor.setBackoffice(clientState, SessionAccessor.isBackoffice(serverSession), false);
+        // clientState.clientVersion <= serverSession.clientVersion ? ALWAYS: the client sends its version once at
+        // connection (kept in the session), so copy it into every call's state — lets server code read the caller's
+        // client version (e.g. the /monitor Analyze capture tags the plan with the client version that ran it).
+        clientState = StateAccessor.setClientVersion(clientState, SessionAccessor.getClientVersion(serverSession));
         return clientState;
     }
 
