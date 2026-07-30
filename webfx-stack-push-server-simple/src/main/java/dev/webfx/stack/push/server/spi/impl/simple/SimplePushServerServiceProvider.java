@@ -58,11 +58,14 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     }
 
     @Override
-    public void setClientMetadata(Object clientRunId, String clientVersion, Boolean pwa) {
+    public void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa) {
         // Attach to an already-registered client only; a not-yet-registered one gets it on a later
-        // live tick (the values are re-supplied from the session each time). Null = keep as known.
+        // live tick (the values are re-supplied from the session each time).
         PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
         if (pushClientInfo != null) {
+            // userId reflects the current login — store it as-is each tick (it changes on login/logout).
+            pushClientInfo.userId = userId;
+            // version/pwa are invariant; keep the last known value if a tick supplies null.
             if (clientVersion != null)
                 pushClientInfo.clientVersion = clientVersion;
             if (pwa != null)
@@ -74,7 +77,7 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     public List<PushClientMetadata> snapshotConnectedClients() {
         List<PushClientMetadata> snapshot = new ArrayList<>(pushClientInfos.size());
         for (PushClientInfo info : pushClientInfos.values())
-            snapshot.add(new PushClientMetadata(info.clientVersion, info.pwa));
+            snapshot.add(new PushClientMetadata(info.userId, info.clientVersion, info.pwa));
         return snapshot;
     }
 
@@ -114,7 +117,9 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         long lastCallTime;
         long lastResultReceivedTime;
         Scheduled pingScheduled;
-        // Invariant connection facts for the /monitor distributions (null until the client reports them).
+        // Session facts for the /monitor page. userId = the current login (updated each live tick);
+        // clientVersion/pwa are invariant (null until the client reports them).
+        Object userId;
         String clientVersion;
         Boolean pwa;
 

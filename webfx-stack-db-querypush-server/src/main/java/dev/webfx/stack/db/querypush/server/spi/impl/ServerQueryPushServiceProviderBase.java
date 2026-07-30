@@ -112,7 +112,6 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             return null;
         }
         List<QueryStreamMonitorInfo> queryStreams = new ArrayList<>();
-        Set<Object> allUserIds = new HashSet<>();
         for (QueryInfo queryInfo : getQueryInfos()) {
             synchronized (queryInfo) { // same lock as addStreamInfo/removeStreamInfo/pushResultToRelevantClients
                 Object[] queryStreamIds = new Object[queryInfo.streamInfos.size()];
@@ -132,7 +131,6 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                             sawFrontoffice = true;
                     }
                 }
-                allUserIds.addAll(userIds);
                 Object[] parameters = queryInfo.queryArgument.getParameters();
                 String parametersDisplay = parameters == null || parameters.length == 0 ? null : Arrays.toString(parameters);
                 if (parametersDisplay != null && parametersDisplay.length() > MONITOR_PARAMETERS_MAX_LENGTH)
@@ -150,12 +148,18 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                     originOf(sawBackoffice, sawFrontoffice)));
             }
         }
-        // Snapshot the connected clients ONCE (a defensive copy) and derive both breakdowns from it —
-        // a single, consistent view, and one pass over the push registry.
+        // Snapshot the connected clients ONCE (a defensive copy) and derive the breakdowns + the
+        // signed-in count from it — a single, consistent view, and one pass over the push registry.
         List<PushClientMetadata> connectedClients = PushServerService.snapshotConnectedClients();
+        // Distinct signed-in users among CONNECTED clients (not subscription-gated): each connected
+        // client carries its session's current userId; count the distinct non-logged-out ones.
+        Set<Object> signedInUsers = new HashSet<>();
+        for (PushClientMetadata c : connectedClients)
+            if (!LogoutUserId.isLogoutUserIdOrNull(c.getUserId()))
+                signedInUsers.add(c.getUserId());
         return new QueryPushMonitorInfo(
             PushServerService.getPushClientsCount(),
-            allUserIds.size(),
+            signedInUsers.size(),
             queryStreams.toArray(new QueryStreamMonitorInfo[0]),
             buildSqlExecutionInfo(),
             buildCompressionInfo(),
