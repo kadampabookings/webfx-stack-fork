@@ -167,11 +167,15 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildClientPwaDistribution(connectedClients),
             buildProfileDistribution(connectedClients, PROFILE_BROWSER),
             buildProfileDistribution(connectedClients, PROFILE_OS),
-            buildProfileDistribution(connectedClients, PROFILE_DEVICE));
+            buildProfileDistribution(connectedClients, PROFILE_DEVICE),
+            buildSignInStatusDistribution(connectedClients));
     }
 
     /** Placeholder bucket name for a connected client that hasn't reported the fact yet (older client). */
     private static final String UNKNOWN_BUCKET = "unknown";
+
+    /** Sign-in status bucket for a client with no signed-in user (logged out / never signed in). */
+    private static final String SIGN_IN_ANONYMOUS = "anonymous";
 
     // Slot indexes in a client's compact "browser|os|deviceType" profile string (see clientDeviceProfile).
     private static final int PROFILE_BROWSER = 0;
@@ -228,6 +232,25 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             return UNKNOWN_BUCKET;
         String value = parts[slot].trim();
         return value.isEmpty() ? UNKNOWN_BUCKET : value;
+    }
+
+    /**
+     * Connected-clients breakdown by sign-in status — a per-connection partition of the connected
+     * clients (a signed-in user with two tabs counts as two). Buckets: "anonymous" (logged out / never
+     * signed in) or the userId principal's type name (e.g. "ModalityUserPrincipal" /
+     * "ModalityGuestPrincipal"). Kept modality-agnostic: the framework forwards the principal's type
+     * name and the back-office maps it to a human label, so no application type leaks in here.
+     */
+    private static NameCountInfo[] buildSignInStatusDistribution(List<PushClientMetadata> connectedClients) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (PushClientMetadata c : connectedClients)
+            counts.merge(signInStatusOf(c.getUserId()), 1, Integer::sum);
+        return toNameCounts(counts);
+    }
+
+    /** "anonymous" for a logged-out/absent user, else the userId principal's simple type name. */
+    private static String signInStatusOf(Object userId) {
+        return LogoutUserId.isLogoutUserIdOrNull(userId) ? SIGN_IN_ANONYMOUS : userId.getClass().getSimpleName();
     }
 
     private static NameCountInfo[] toNameCounts(Map<String, Integer> counts) {

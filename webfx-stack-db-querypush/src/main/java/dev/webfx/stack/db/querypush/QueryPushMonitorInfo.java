@@ -21,11 +21,13 @@ public final class QueryPushMonitorInfo {
     private final NameCountInfo[] clientBrowsers;       // connected-clients breakdown by browser (may be null on older servers)
     private final NameCountInfo[] clientOses;           // connected-clients breakdown by OS (may be null on older servers)
     private final NameCountInfo[] clientDeviceTypes;    // connected-clients breakdown by device type: desktop/tablet/phone/unknown (may be null on older servers)
+    private final NameCountInfo[] clientSignInStatuses; // connected-clients (per connection) breakdown by sign-in status: anonymous / principal type name (may be null on older servers)
 
     public QueryPushMonitorInfo(int pushClientsCount, int subscribedUsersCount, QueryStreamMonitorInfo[] queryStreams,
                                 SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression,
                                 NameCountInfo[] clientVersions, NameCountInfo[] clientPwaModes,
-                                NameCountInfo[] clientBrowsers, NameCountInfo[] clientOses, NameCountInfo[] clientDeviceTypes) {
+                                NameCountInfo[] clientBrowsers, NameCountInfo[] clientOses, NameCountInfo[] clientDeviceTypes,
+                                NameCountInfo[] clientSignInStatuses) {
         this.pushClientsCount = pushClientsCount;
         this.subscribedUsersCount = subscribedUsersCount;
         this.queryStreams = queryStreams;
@@ -36,6 +38,7 @@ public final class QueryPushMonitorInfo {
         this.clientBrowsers = clientBrowsers;
         this.clientOses = clientOses;
         this.clientDeviceTypes = clientDeviceTypes;
+        this.clientSignInStatuses = clientSignInStatuses;
     }
 
     public int getPushClientsCount() {
@@ -76,5 +79,9 @@ public final class QueryPushMonitorInfo {
 
     public NameCountInfo[] getClientDeviceTypes() {
         return clientDeviceTypes;
+    }
+
+    public NameCountInfo[] getClientSignInStatuses() {
+        return clientSignInStatuses;
     }
 }

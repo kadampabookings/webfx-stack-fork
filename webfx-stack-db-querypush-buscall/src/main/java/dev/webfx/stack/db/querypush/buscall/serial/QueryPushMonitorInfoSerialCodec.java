@@ -22,6 +22,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String CLIENT_BROWSERS_KEY = "clientBrowsers";
     private static final String CLIENT_OSES_KEY = "clientOses";
     private static final String CLIENT_DEVICE_TYPES_KEY = "clientDeviceTypes";
+    private static final String CLIENT_SIGN_IN_STATUSES_KEY = "clientSignInStatuses";
 
     public QueryPushMonitorInfoSerialCodec() {
         super(QueryPushMonitorInfo.class, CODEC_ID);
@@ -40,6 +41,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         encodeArray(  serial, CLIENT_BROWSERS_KEY,        arg.getClientBrowsers());
         encodeArray(  serial, CLIENT_OSES_KEY,            arg.getClientOses());
         encodeArray(  serial, CLIENT_DEVICE_TYPES_KEY,    arg.getClientDeviceTypes());
+        encodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, arg.getClientSignInStatuses());
     }
 
     @Override
@@ -54,7 +56,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
                 decodeArray(  serial, CLIENT_PWA_MODES_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_BROWSERS_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_OSES_KEY, NameCountInfo.class),
-                decodeArray(  serial, CLIENT_DEVICE_TYPES_KEY, NameCountInfo.class)
+                decodeArray(  serial, CLIENT_DEVICE_TYPES_KEY, NameCountInfo.class),
+                decodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, NameCountInfo.class)
         );
     }
 
