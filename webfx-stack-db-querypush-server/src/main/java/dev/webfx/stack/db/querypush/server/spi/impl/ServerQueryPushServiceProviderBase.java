@@ -304,12 +304,16 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
     // ---- Database health (on-demand; queries pg_stat_activity, kept off the regular monitor poll) ----
 
-    // Connection counts + max_connections in one row.
+    // Connection counts + max_connections in one row. Counts only CLIENT backends — Postgres's own
+    // background/auxiliary processes (autovacuum launcher, bgwriter, checkpointer, walwriter, …) have
+    // a NULL state and don't count against max_connections, so excluding them makes total meaningful
+    // (vs max_connections) and lets the client sum active + idle + other = total. "other" (client
+    // backends in states like "idle in transaction") is derived on the client as total − active − idle.
     private static final String DB_CONNECTIONS_SQL =
         "select (select setting::int from pg_settings where name='max_connections') as max_conn," +
-        " count(*)::int as total," +
-        " count(*) filter (where state='active')::int as active," +
-        " count(*) filter (where state='idle')::int as idle" +
+        " count(*) filter (where backend_type = 'client backend')::int as total," +
+        " count(*) filter (where backend_type = 'client backend' and state='active')::int as active," +
+        " count(*) filter (where backend_type = 'client backend' and state='idle')::int as idle" +
         " from pg_stat_activity";
 
     // Non-idle backends (long-running / blocking) across all clients, worst-first, capped. Excludes
