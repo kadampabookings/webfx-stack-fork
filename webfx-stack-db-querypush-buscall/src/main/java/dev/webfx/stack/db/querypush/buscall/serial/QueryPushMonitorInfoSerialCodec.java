@@ -19,6 +19,9 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String COMPRESSION_KEY = "compression";
     private static final String CLIENT_VERSIONS_KEY = "clientVersions";
     private static final String CLIENT_PWA_MODES_KEY = "clientPwaModes";
+    private static final String CLIENT_BROWSERS_KEY = "clientBrowsers";
+    private static final String CLIENT_OSES_KEY = "clientOses";
+    private static final String CLIENT_DEVICE_TYPES_KEY = "clientDeviceTypes";
 
     public QueryPushMonitorInfoSerialCodec() {
         super(QueryPushMonitorInfo.class, CODEC_ID);
@@ -34,6 +37,9 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         encodeObject( serial, COMPRESSION_KEY,            arg.getCompression());
         encodeArray(  serial, CLIENT_VERSIONS_KEY,        arg.getClientVersions());
         encodeArray(  serial, CLIENT_PWA_MODES_KEY,       arg.getClientPwaModes());
+        encodeArray(  serial, CLIENT_BROWSERS_KEY,        arg.getClientBrowsers());
+        encodeArray(  serial, CLIENT_OSES_KEY,            arg.getClientOses());
+        encodeArray(  serial, CLIENT_DEVICE_TYPES_KEY,    arg.getClientDeviceTypes());
     }
 
     @Override
@@ -45,7 +51,10 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
                 (SqlExecutionMonitorInfo) decodeObject(serial, SQL_EXECUTION_KEY),
                 (CompressionMonitorInfo) decodeObject(serial, COMPRESSION_KEY),
                 decodeArray(  serial, CLIENT_VERSIONS_KEY, NameCountInfo.class),
-                decodeArray(  serial, CLIENT_PWA_MODES_KEY, NameCountInfo.class)
+                decodeArray(  serial, CLIENT_PWA_MODES_KEY, NameCountInfo.class),
+                decodeArray(  serial, CLIENT_BROWSERS_KEY, NameCountInfo.class),
+                decodeArray(  serial, CLIENT_OSES_KEY, NameCountInfo.class),
+                decodeArray(  serial, CLIENT_DEVICE_TYPES_KEY, NameCountInfo.class)
         );
     }
 

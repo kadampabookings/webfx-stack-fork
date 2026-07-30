@@ -18,10 +18,14 @@ public final class QueryPushMonitorInfo {
     private final CompressionMonitorInfo compression;   // QueryResult compression metrics (may be null on older servers)
     private final NameCountInfo[] clientVersions;       // connected-clients breakdown by build version (may be null on older servers)
     private final NameCountInfo[] clientPwaModes;       // connected-clients breakdown by PWA mode: installed/browser/unknown (may be null on older servers)
+    private final NameCountInfo[] clientBrowsers;       // connected-clients breakdown by browser (may be null on older servers)
+    private final NameCountInfo[] clientOses;           // connected-clients breakdown by OS (may be null on older servers)
+    private final NameCountInfo[] clientDeviceTypes;    // connected-clients breakdown by device type: desktop/tablet/phone/unknown (may be null on older servers)
 
     public QueryPushMonitorInfo(int pushClientsCount, int subscribedUsersCount, QueryStreamMonitorInfo[] queryStreams,
                                 SqlExecutionMonitorInfo sqlExecution, CompressionMonitorInfo compression,
-                                NameCountInfo[] clientVersions, NameCountInfo[] clientPwaModes) {
+                                NameCountInfo[] clientVersions, NameCountInfo[] clientPwaModes,
+                                NameCountInfo[] clientBrowsers, NameCountInfo[] clientOses, NameCountInfo[] clientDeviceTypes) {
         this.pushClientsCount = pushClientsCount;
         this.subscribedUsersCount = subscribedUsersCount;
         this.queryStreams = queryStreams;
@@ -29,6 +33,9 @@ public final class QueryPushMonitorInfo {
         this.compression = compression;
         this.clientVersions = clientVersions;
         this.clientPwaModes = clientPwaModes;
+        this.clientBrowsers = clientBrowsers;
+        this.clientOses = clientOses;
+        this.clientDeviceTypes = clientDeviceTypes;
     }
 
     public int getPushClientsCount() {
@@ -57,5 +64,17 @@ public final class QueryPushMonitorInfo {
 
     public NameCountInfo[] getClientPwaModes() {
         return clientPwaModes;
+    }
+
+    public NameCountInfo[] getClientBrowsers() {
+        return clientBrowsers;
+    }
+
+    public NameCountInfo[] getClientOses() {
+        return clientOses;
+    }
+
+    public NameCountInfo[] getClientDeviceTypes() {
+        return clientDeviceTypes;
     }
 }

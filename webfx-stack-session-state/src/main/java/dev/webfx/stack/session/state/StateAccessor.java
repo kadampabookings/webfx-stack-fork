@@ -21,6 +21,8 @@ public final class StateAccessor {
     // Invariant per-connection client facts, sent once at (re)connection and kept in the server session.
     private final static String CLIENT_VERSION_ATTRIBUTE_NAME = "clientVersion";
     private final static String PWA_ATTRIBUTE_NAME = "pwa";
+    // Compact "browser|os|deviceType" device profile, sent once at connection (for the /monitor breakdowns).
+    private final static String CLIENT_PROFILE_ATTRIBUTE_NAME = "clientProfile";
     private final static String SERVER_RUN_ID_ATTRIBUTE_NAME = "serverRunId";
     // Stamped on every server-emitted state envelope; clients drop any envelope without it.
     private final static String SERVER_ORIGIN_ATTRIBUTE_NAME = "serverOrigin";
@@ -144,6 +146,14 @@ public final class StateAccessor {
 
     public static Object setPwa(Object state, Boolean pwa) {
         return setStateAttribute(state, PWA_ATTRIBUTE_NAME, pwa, true);
+    }
+
+    public static String getClientProfile(Object state) {
+        return (String) getStateAttribute(state, CLIENT_PROFILE_ATTRIBUTE_NAME);
+    }
+
+    public static Object setClientProfile(Object state, String clientProfile) {
+        return setStateAttribute(state, CLIENT_PROFILE_ATTRIBUTE_NAME, clientProfile, true);
     }
 
     /** Get the server-generated run ID (unique per server process lifetime). */

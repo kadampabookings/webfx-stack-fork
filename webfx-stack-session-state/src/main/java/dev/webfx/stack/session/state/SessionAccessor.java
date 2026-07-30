@@ -16,6 +16,7 @@ public final class SessionAccessor {
     private final static String BACKOFFICE_ATTRIBUE_NAME = "backoffice"; // Used only on the server side to store the client type (backoffice or not)
     private final static String CLIENT_VERSION_ATTRIBUE_NAME = "clientVersion"; // Server-side: invariant client build id, sent once at connection
     private final static String PWA_ATTRIBUE_NAME = "pwa"; // Server-side: whether the client runs as an installed PWA, sent once at connection
+    private final static String CLIENT_PROFILE_ATTRIBUE_NAME = "clientProfile"; // Server-side: compact "browser|os|deviceType" profile, sent once at connection
     private final static String SERVER_SESSION_ID_SYNCED_ATTRIBUE_NAME = "serverSessionIdSynced"; // Used only on the server side to store the info if the client knows the sessionId
 
 
@@ -65,6 +66,14 @@ public final class SessionAccessor {
 
     public static boolean changePwa(Session session, Boolean pwa, boolean skipNullValue) {
         return changeSessionAttribute(session, PWA_ATTRIBUE_NAME, pwa, skipNullValue);
+    }
+
+    public static String getClientProfile(Session session) {
+        return session.get(CLIENT_PROFILE_ATTRIBUE_NAME);
+    }
+
+    public static boolean changeClientProfile(Session session, String clientProfile, boolean skipNullValue) {
+        return changeSessionAttribute(session, CLIENT_PROFILE_ATTRIBUE_NAME, clientProfile, skipNullValue);
     }
 
     public static boolean isServerSessionIdSynced(Session session) {

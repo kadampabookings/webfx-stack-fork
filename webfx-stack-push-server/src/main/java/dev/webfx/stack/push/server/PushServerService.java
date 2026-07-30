@@ -38,9 +38,9 @@ public final class PushServerService {
         getProvider().clientIsLive(clientRunId);
     }
 
-    /** Records a connected client's session facts (userId, version, PWA mode) for the /monitor distributions. */
-    public static void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa) {
-        getProvider().setClientMetadata(clientRunId, userId, clientVersion, pwa);
+    /** Records a connected client's session facts (userId, version, PWA mode, device profile) for the /monitor distributions. */
+    public static void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa, String clientProfile) {
+        getProvider().setClientMetadata(clientRunId, userId, clientVersion, pwa, clientProfile);
     }
 
     /** Snapshot of currently-connected clients' invariant metadata, for the /monitor distributions. */

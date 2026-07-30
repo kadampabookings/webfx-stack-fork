@@ -27,10 +27,10 @@ public interface PushServerServiceProvider {
      * Records invariant per-connection metadata (client build version + PWA mode) on an already-
      * registered connected client, for the /monitor distributions. No-op when the client isn't
      * registered yet (it will be re-supplied on the next live tick) — never creates an entry. Null
-     * clientVersion/pwa are ignored (kept as previously known); {@code userId} reflects the current
-     * login and is stored as-is on each tick (it changes on login/logout).
+     * clientVersion/pwa/clientProfile are ignored (kept as previously known); {@code userId} reflects
+     * the current login and is stored as-is on each tick (it changes on login/logout).
      */
-    default void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa) {
+    default void setClientMetadata(Object clientRunId, Object userId, String clientVersion, Boolean pwa, String clientProfile) {
     }
 
     /** Snapshot of the currently-connected clients' invariant metadata, for the /monitor distributions. */

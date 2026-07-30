@@ -92,7 +92,7 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
      */
     @FunctionalInterface
     public interface ClientLiveListener {
-        void onClientLive(Object runId, Object userId, String clientVersion, Boolean pwa);
+        void onClientLive(Object runId, Object userId, String clientVersion, Boolean pwa, String clientProfile);
     }
 
     private static ClientLiveListener clientLiveListener;
@@ -113,7 +113,7 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
                 // Read the invariant client facts from the session (the client sent them once at
                 // connection). Re-supplied on every live tick so a push entry created after connect
                 // still picks them up.
-                clientLiveListener.onClientLive(runId, SessionAccessor.getUserId(session), SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session));
+                clientLiveListener.onClientLive(runId, SessionAccessor.getUserId(session), SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session), SessionAccessor.getClientProfile(session));
                 return true; // to tell that we found the runId
             }
             Console.warn("ServerJsonBusStateManager.clientIsLive() was called but no runId could be found (session id = " + session.id() + ", ping = " + ping + ")");

@@ -163,9 +163,10 @@ public final class ServerSideStateSessionSyncer {
         // client sends once at (re)connection; kept in the session (source of truth for the /monitor distributions).
         boolean clientVersionChanged = SessionAccessor.changeClientVersion(serverSession, StateAccessor.getClientVersion(clientState), true);
         boolean pwaChanged = SessionAccessor.changePwa(serverSession, StateAccessor.getPwa(clientState), true);
+        boolean clientProfileChanged = SessionAccessor.changeClientProfile(serverSession, StateAccessor.getClientProfile(clientState), true);
         // Since clients communicate the runId on first connection or reconnection, the sessionId must be synced in both cases (on reconnection, the session id may have changed)
         boolean sessionIdSyncedChanged = runId != null && SessionAccessor.changeServerSessionIdSynced(serverSession, false);
-        if (userIdChanged || runIdChanged || backofficeChanged || clientVersionChanged || pwaChanged || sessionIdSyncedChanged || forceStore)
+        if (userIdChanged || runIdChanged || backofficeChanged || clientVersionChanged || pwaChanged || clientProfileChanged || sessionIdSyncedChanged || forceStore)
             return storeServerSession(serverSession);
         return Future.succeededFuture(serverSession);
     }

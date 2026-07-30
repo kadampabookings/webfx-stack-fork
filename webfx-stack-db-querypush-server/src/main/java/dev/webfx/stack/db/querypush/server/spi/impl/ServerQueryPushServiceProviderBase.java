@@ -164,11 +164,19 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildSqlExecutionInfo(),
             buildCompressionInfo(),
             buildClientVersionDistribution(connectedClients),
-            buildClientPwaDistribution(connectedClients));
+            buildClientPwaDistribution(connectedClients),
+            buildProfileDistribution(connectedClients, PROFILE_BROWSER),
+            buildProfileDistribution(connectedClients, PROFILE_OS),
+            buildProfileDistribution(connectedClients, PROFILE_DEVICE));
     }
 
     /** Placeholder bucket name for a connected client that hasn't reported the fact yet (older client). */
     private static final String UNKNOWN_BUCKET = "unknown";
+
+    // Slot indexes in a client's compact "browser|os|deviceType" profile string (see clientDeviceProfile).
+    private static final int PROFILE_BROWSER = 0;
+    private static final int PROFILE_OS = 1;
+    private static final int PROFILE_DEVICE = 2;
 
     /** Connected-clients breakdown by build version (an "unknown" bucket for clients that don't report it). */
     private static NameCountInfo[] buildClientVersionDistribution(List<PushClientMetadata> connectedClients) {
@@ -197,6 +205,29 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         if (unknown > 0)
             counts.put(UNKNOWN_BUCKET, unknown);
         return toNameCounts(counts);
+    }
+
+    /**
+     * Connected-clients breakdown by one slot of the compact "browser|os|deviceType" profile
+     * (PROFILE_BROWSER / PROFILE_OS / PROFILE_DEVICE). A client that didn't report a profile — or
+     * reported "unknown" for that slot — falls into the "unknown" bucket (both map to UNKNOWN_BUCKET).
+     */
+    private static NameCountInfo[] buildProfileDistribution(List<PushClientMetadata> connectedClients, int slot) {
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        for (PushClientMetadata c : connectedClients)
+            counts.merge(profileSlot(c.getClientProfile(), slot), 1, Integer::sum);
+        return toNameCounts(counts);
+    }
+
+    /** Reads one "|"-separated slot of a client profile, mapping a null/short/empty value to "unknown". */
+    private static String profileSlot(String clientProfile, int slot) {
+        if (clientProfile == null || clientProfile.isEmpty())
+            return UNKNOWN_BUCKET;
+        String[] parts = clientProfile.split("\\|", -1);
+        if (slot >= parts.length)
+            return UNKNOWN_BUCKET;
+        String value = parts[slot].trim();
+        return value.isEmpty() ? UNKNOWN_BUCKET : value;
     }
 
     private static NameCountInfo[] toNameCounts(Map<String, Integer> counts) {
