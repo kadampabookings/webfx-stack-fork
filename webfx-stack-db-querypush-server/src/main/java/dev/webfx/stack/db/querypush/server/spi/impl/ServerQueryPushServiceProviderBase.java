@@ -50,6 +50,8 @@ import java.lang.management.ManagementFactory;
 import java.lang.management.MemoryPoolMXBean;
 import java.lang.management.MemoryType;
 import java.lang.management.MemoryUsage;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * @author Bruno Salmon
@@ -233,7 +235,51 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             }
         } catch (Throwable ignored) { /* keep 0 */ }
 
-        return new SystemResourceMonitorInfo(cpuLoad, processors, heapUsed, heapCommitted, heapMax, oldGenAfterGc, gcCount, gcTimeMillis);
+        // Uptime — a resetting value across polls flags crashes / OOM-kills (the server restarted).
+        long uptimeMillis = 0;
+        try {
+            uptimeMillis = ManagementFactory.getRuntimeMXBean().getUptime();
+        } catch (Throwable ignored) { /* keep 0 */ }
+
+        // Event-loop lag: start the probe (once) and take the worst lag since the previous poll.
+        ensureEventLoopProbe();
+        long eventLoopLagMillis = takeEventLoopLagMillis();
+
+        return new SystemResourceMonitorInfo(cpuLoad, processors, heapUsed, heapCommitted, heapMax,
+            oldGenAfterGc, gcCount, gcTimeMillis, uptimeMillis, eventLoopLagMillis);
+    }
+
+    // ---- Vert.x event-loop lag probe ----------------------------------------------------------------
+    // A blocked event loop stalls EVERY client while CPU can still look idle — the signature Vert.x
+    // health signal. We schedule a periodic no-op on an event loop (webfx Scheduler → vertx.setPeriodic)
+    // and measure how late each tick fires vs its interval; that scheduling delay IS the loop's lag.
+    // Only measures the one event loop the timer lands on — a reasonable single-instance proxy.
+
+    private static final long EVENT_LOOP_PROBE_INTERVAL_MS = 250;
+    private static final AtomicBoolean EVENT_LOOP_PROBE_STARTED = new AtomicBoolean(false);
+    /** Worst lag (ms) seen since the last {@link #takeEventLoopLagMillis()}; -1 means "no sample yet". */
+    private static final AtomicLong EVENT_LOOP_LAG_MAX_MILLIS = new AtomicLong(-1);
+    /** Previous tick time (ns). Touched only on the probe's own event-loop thread. */
+    private static long eventLoopLastProbeNanos;
+
+    /** Starts the periodic event-loop lag probe once (lazily, on first /monitor view). */
+    private static void ensureEventLoopProbe() {
+        if (EVENT_LOOP_PROBE_STARTED.compareAndSet(false, true)) {
+            eventLoopLastProbeNanos = System.nanoTime();
+            Scheduler.schedulePeriodic(EVENT_LOOP_PROBE_INTERVAL_MS, () -> {
+                long now = System.nanoTime();
+                long elapsedMs = (now - eventLoopLastProbeNanos) / 1_000_000;
+                eventLoopLastProbeNanos = now;
+                long lag = elapsedMs - EVENT_LOOP_PROBE_INTERVAL_MS; // how much later than scheduled this tick fired
+                long clamped = Math.max(0, lag);
+                EVENT_LOOP_LAG_MAX_MILLIS.updateAndGet(prev -> Math.max(prev, clamped));
+            });
+        }
+    }
+
+    /** Worst event-loop lag since the previous call, then resets; -1 if the probe hasn't ticked yet. */
+    private static long takeEventLoopLagMillis() {
+        return EVENT_LOOP_LAG_MAX_MILLIS.getAndSet(-1);
     }
 
     /** Whether a memory-pool name denotes the tenured/old generation (collector-independent). */

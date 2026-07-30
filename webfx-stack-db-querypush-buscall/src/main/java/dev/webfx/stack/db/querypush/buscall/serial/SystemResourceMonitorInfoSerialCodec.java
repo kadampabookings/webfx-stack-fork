@@ -19,6 +19,8 @@ public final class SystemResourceMonitorInfoSerialCodec extends SerialCodecBase<
     private static final String OLD_GEN_AFTER_GC_KEY = "oldGenUsedAfterGc";
     private static final String GC_COUNT_KEY = "gcCount";
     private static final String GC_TIME_MILLIS_KEY = "gcTimeMillis";
+    private static final String UPTIME_MILLIS_KEY = "uptimeMillis";
+    private static final String EVENT_LOOP_LAG_MILLIS_KEY = "eventLoopLagMillis";
 
     public SystemResourceMonitorInfoSerialCodec() {
         super(SystemResourceMonitorInfo.class, CODEC_ID);
@@ -35,6 +37,8 @@ public final class SystemResourceMonitorInfoSerialCodec extends SerialCodecBase<
         encodeLong(   serial, OLD_GEN_AFTER_GC_KEY,  arg.getOldGenUsedAfterGc());
         encodeLong(   serial, GC_COUNT_KEY,          arg.getGcCount());
         encodeLong(   serial, GC_TIME_MILLIS_KEY,    arg.getGcTimeMillis());
+        encodeLong(   serial, UPTIME_MILLIS_KEY,     arg.getUptimeMillis());
+        encodeLong(   serial, EVENT_LOOP_LAG_MILLIS_KEY, arg.getEventLoopLagMillis());
     }
 
     @Override
@@ -49,7 +53,9 @@ public final class SystemResourceMonitorInfoSerialCodec extends SerialCodecBase<
             orLong(decodeLong(serial, HEAP_MAX_KEY), -1),
             orLong(decodeLong(serial, OLD_GEN_AFTER_GC_KEY), -1),
             orZero(decodeLong(serial, GC_COUNT_KEY)),
-            orZero(decodeLong(serial, GC_TIME_MILLIS_KEY)));
+            orZero(decodeLong(serial, GC_TIME_MILLIS_KEY)),
+            orZero(decodeLong(serial, UPTIME_MILLIS_KEY)),
+            orLong(decodeLong(serial, EVENT_LOOP_LAG_MILLIS_KEY), -1));
     }
 
     private static int orInt(Integer i, int dflt) {

@@ -34,9 +34,15 @@ public final class SystemResourceMonitorInfo {
     private final long gcCount;            // total garbage collections since start (all collectors)
     private final long gcTimeMillis;       // total time spent in GC since start (all collectors), ms
 
+    private final long uptimeMillis;       // JVM uptime (ms since start) — a resetting value flags crashes/OOM-kills
+    // Worst Vert.x event-loop scheduling lag (ms) observed since the previous /monitor poll; -1 if not
+    // measured yet. A blocked event loop stalls ALL clients while CPU can still look low.
+    private final long eventLoopLagMillis;
+
     public SystemResourceMonitorInfo(double processCpuLoad, int availableProcessors,
                                      long heapUsed, long heapCommitted, long heapMax,
-                                     long oldGenUsedAfterGc, long gcCount, long gcTimeMillis) {
+                                     long oldGenUsedAfterGc, long gcCount, long gcTimeMillis,
+                                     long uptimeMillis, long eventLoopLagMillis) {
         this.processCpuLoad = processCpuLoad;
         this.availableProcessors = availableProcessors;
         this.heapUsed = heapUsed;
@@ -45,6 +51,8 @@ public final class SystemResourceMonitorInfo {
         this.oldGenUsedAfterGc = oldGenUsedAfterGc;
         this.gcCount = gcCount;
         this.gcTimeMillis = gcTimeMillis;
+        this.uptimeMillis = uptimeMillis;
+        this.eventLoopLagMillis = eventLoopLagMillis;
     }
 
     public double getProcessCpuLoad() { return processCpuLoad; }
@@ -55,4 +63,6 @@ public final class SystemResourceMonitorInfo {
     public long getOldGenUsedAfterGc() { return oldGenUsedAfterGc; }
     public long getGcCount() { return gcCount; }
     public long getGcTimeMillis() { return gcTimeMillis; }
+    public long getUptimeMillis() { return uptimeMillis; }
+    public long getEventLoopLagMillis() { return eventLoopLagMillis; }
 }
