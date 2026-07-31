@@ -1,5 +1,6 @@
 package dev.webfx.stack.db.querysubmit;
 
+import dev.webfx.platform.async.AsyncResult;
 import dev.webfx.platform.async.Batch;
 import dev.webfx.platform.async.Future;
 import dev.webfx.platform.async.util.AsyncQueue;
@@ -131,6 +132,36 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         return runId == null ? null : ThreadLocalStateHolder.isBackoffice();
     }
 
+    /**
+     * Records a completed operation in the /monitor SqlExecutionMonitor: always the counter, plus — on
+     * failure — the error detail (statement + cause message + caller origin) for the "Errors"
+     * drill-down. {@code statement} is the operation's statement (for a batch, its first, as the
+     * representative; the cause message carries the specific failure).
+     */
+    private void recordCompletion(long t0n, AsyncResult<?> ar, String statement, Boolean backoffice) {
+        SqlExecutionMonitor mon = SqlExecutionMonitor.get();
+        mon.record(monitorKind, System.nanoTime() - t0n, ar.succeeded());
+        if (ar.failed())
+            mon.recordError(monitorKind, statement, errorMessage(ar.cause()), backoffice, System.currentTimeMillis());
+    }
+
+    /** A concise message for a failed operation's cause (null-safe; falls back to the type name). */
+    private static String errorMessage(Throwable cause) {
+        if (cause == null)
+            return "(unknown error)";
+        String msg = cause.getMessage();
+        return msg != null ? msg : cause.toString();
+    }
+
+    /** The batch's first statement, as the representative statement for a failed batch (null if empty). */
+    private static String firstStatementOf(QueryArgument[] arr) {
+        return arr != null && arr.length > 0 ? arr[0].getStatement() : null;
+    }
+
+    private static String firstStatementOf(SubmitArgument[] arr) {
+        return arr != null && arr.length > 0 ? arr[0].getStatement() : null;
+    }
+
     private Future<QueryResult> executeQueryNow(QueryArgument argument, Boolean backoffice) {
         long t0 = System.currentTimeMillis();
         long t0n = System.nanoTime();
@@ -142,7 +173,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                     log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Query executed in " + executionTimeMillis + "ms: " + argument);
                 }
             })
-            .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
+            .onComplete(ar -> recordCompletion(t0n, ar, argument.getStatement(), backoffice));
     }
 
     @Override
@@ -172,7 +203,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                     log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Query batch executed in " + executionTimeMillis + "ms");
                 }
             })
-            .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
+            .onComplete(ar -> recordCompletion(t0n, ar, firstStatementOf(batch.getArray()), backoffice));
     }
 
     private io.vertx.core.Future<QueryResult> executeConnectionQuery(SqlConnection connection, QueryArgument argument, Boolean backoffice) {
@@ -277,7 +308,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // Note: executeIndividualSubmitWithConnection() already logs failure and timing
         long t0n = System.nanoTime();
         return toWebfxFuture(withConnection(pool, connection -> executeIndividualSubmitWithConnection(argument, connection, null, backoffice)))
-            .onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
+            .onComplete(ar -> recordCompletion(t0n, ar, argument.getStatement(), backoffice));
     }
 
     @Override
@@ -316,7 +347,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                 log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Submit batch executed in " + executionTimeMillis + "ms");
             }
             onSuccessfulSubmitBatch(batch);
-        }).onComplete(ar -> SqlExecutionMonitor.get().record(monitorKind, System.nanoTime() - t0n, ar.succeeded()));
+        }).onComplete(ar -> recordCompletion(t0n, ar, firstStatementOf(batch.getArray()), backoffice));
     }
 
     private static void onSuccessfulSubmitBatch(Batch<SubmitArgument> batch) {

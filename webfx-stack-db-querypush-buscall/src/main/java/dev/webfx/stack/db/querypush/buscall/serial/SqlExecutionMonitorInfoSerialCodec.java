@@ -3,6 +3,7 @@ package dev.webfx.stack.db.querypush.buscall.serial;
 import dev.webfx.platform.ast.AstObject;
 import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.stack.com.serial.spi.impl.SerialCodecBase;
+import dev.webfx.stack.db.querypush.DbErrorMonitorInfo;
 import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
 import dev.webfx.stack.db.querypush.SqlExecutionMonitorInfo;
@@ -16,6 +17,7 @@ public final class SqlExecutionMonitorInfoSerialCodec extends SerialCodecBase<Sq
     private static final String TOP_STATEMENTS_KEY = "topStatements";
     private static final String IN_FLIGHT_KEY = "inFlight";
     private static final String ANALYZE_RESULTS_KEY = "analyzeResults";
+    private static final String RECENT_ERRORS_KEY = "recentErrors";
 
     public SqlExecutionMonitorInfoSerialCodec() {
         super(SqlExecutionMonitorInfo.class, CODEC_ID);
@@ -28,6 +30,7 @@ public final class SqlExecutionMonitorInfoSerialCodec extends SerialCodecBase<Sq
         encodeArray( serial, TOP_STATEMENTS_KEY,  arg.getTopStatements());
         encodeArray( serial, IN_FLIGHT_KEY,       arg.getInFlight());
         encodeArray( serial, ANALYZE_RESULTS_KEY, arg.getAnalyzeResults());
+        encodeArray( serial, RECENT_ERRORS_KEY,   arg.getRecentErrors());
     }
 
     @Override
@@ -37,6 +40,7 @@ public final class SqlExecutionMonitorInfoSerialCodec extends SerialCodecBase<Sq
             decodeObject(serial, WRITE_KEY),
             decodeArray( serial, TOP_STATEMENTS_KEY, StatementMonitorInfo.class),
             decodeArray( serial, IN_FLIGHT_KEY, InFlightQueryMonitorInfo.class),
-            decodeArray( serial, ANALYZE_RESULTS_KEY, SqlAnalyzeResultInfo.class));
+            decodeArray( serial, ANALYZE_RESULTS_KEY, SqlAnalyzeResultInfo.class),
+            decodeArray( serial, RECENT_ERRORS_KEY, DbErrorMonitorInfo.class));
     }
 }

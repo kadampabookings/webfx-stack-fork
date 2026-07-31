@@ -15,6 +15,7 @@ import dev.webfx.platform.util.Numbers;
 import dev.webfx.stack.db.querypush.ActiveDbQueryInfo;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
+import dev.webfx.stack.db.querypush.DbErrorMonitorInfo;
 import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
@@ -598,7 +599,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         SqlAnalyzeResultInfo[] analyze = new SqlAnalyzeResultInfo[ar.size()];
         for (int i = 0; i < analyze.length; i++)
             analyze[i] = toAnalyzeInfo(ar.get(i), now);
-        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights, analyze);
+        List<SqlExecutionMonitor.ErrorSnapshot> es = s.recentErrors();
+        DbErrorMonitorInfo[] errors = new DbErrorMonitorInfo[es.size()];
+        for (int i = 0; i < errors.length; i++) {
+            SqlExecutionMonitor.ErrorSnapshot e = es.get(i);
+            errors[i] = new DbErrorMonitorInfo(e.epochMillis(), kindName(e.kind()), e.statement(), e.message(), e.origin());
+        }
+        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights, analyze, errors);
     }
 
     private static String kindName(SqlExecutionMonitor.Kind k) {
