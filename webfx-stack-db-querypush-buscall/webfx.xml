@@ -21,6 +21,7 @@
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.ActiveDbQueryInfoSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.CompressionMonitorInfoSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.DatabaseHealthMonitorInfoSerialCodec</provider>
+        <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.DbErrorMonitorInfoSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.NameCountInfoSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.QueryPushArgumentSerialCodec</provider>
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.db.querypush.buscall.serial.QueryPushMonitorInfoSerialCodec</provider>

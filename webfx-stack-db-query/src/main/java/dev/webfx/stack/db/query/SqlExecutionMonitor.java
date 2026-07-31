@@ -2,9 +2,11 @@ package dev.webfx.stack.db.query;
 
 import dev.webfx.platform.async.util.AsyncQueue;
 
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
@@ -65,6 +67,23 @@ public final class SqlExecutionMonitor {
     }
 
     /**
+     * Records the detail of one failed SQL operation for the /monitor "Errors" drill-down (in addition
+     * to the {@link #record} counter bump). Kept in a small bounded ring buffer — the newest
+     * {@link #MAX_RECENT_ERRORS} are retained, older ones evicted — so the count on the card can
+     * exceed the number of rows shown. {@code message} is truncated to bound the payload; {@code
+     * epochMillis} is the caller's wall-clock time (passed in to keep this module clock-free).
+     */
+    public synchronized void recordError(Kind kind, String statement, String message, Boolean backoffice, long epochMillis) {
+        recentErrors.addLast(new ErrorEntry(epochMillis, kind, statement, truncate(message, MAX_ERROR_MESSAGE_CHARS), backoffice));
+        while (recentErrors.size() > MAX_RECENT_ERRORS)
+            recentErrors.removeFirst();
+    }
+
+    private static String truncate(String s, int max) {
+        return s != null && s.length() > max ? s.substring(0, max) + "…" : s;
+    }
+
+    /**
      * Resets the cumulative counters and per-statement rollup so the /monitor page can measure a
      * fresh window (Clear → run an action → see only what it triggered). Keeps live state: the
      * registered {@link AsyncQueue}s and the in-flight registry (queries still running) are
@@ -74,6 +93,7 @@ public final class SqlExecutionMonitor {
         read.count = 0;  read.totalNanos = 0;  read.errorCount = 0;
         write.count = 0; write.totalNanos = 0; write.errorCount = 0;
         statementStats.clear();
+        recentErrors.clear();
     }
 
     // ── In-flight registry + per-statement rollup (drives the /monitor drill-down and,
@@ -85,9 +105,17 @@ public final class SqlExecutionMonitor {
     /** Cap on distinct statements tracked; past this, the smallest-total entry is evicted. */
     private static final int MAX_TRACKED_STATEMENTS = 256;
 
+    /** Newest failed operations retained for the "Errors" drill-down (older ones evicted). */
+    private static final int MAX_RECENT_ERRORS = 50;
+
+    /** Cap on a stored error message (Postgres messages can be long); keeps the wire payload bounded. */
+    private static final int MAX_ERROR_MESSAGE_CHARS = 1000;
+
     private long idSeq;
     private final Map<Long, InFlight> inFlight = new HashMap<>();
     private final Map<String, StatementStat> statementStats = new HashMap<>();
+    // Bounded FIFO of recent failures (oldest at the head, newest at the tail); read newest-first.
+    private final ArrayDeque<ErrorEntry> recentErrors = new ArrayDeque<>();
 
     /**
      * Registers a starting SQL execution and returns its monitor id. The {@code cancelHandle} is
@@ -199,6 +227,7 @@ public final class SqlExecutionMonitor {
         AsyncQueue rq, wq;
         List<StatementSnapshot> statements;
         List<InFlightSnapshot> flights;
+        List<ErrorSnapshot> errors;
         synchronized (this) {
             rc = read.count;  rt = read.totalNanos;  re = read.errorCount;  rq = read.queue;
             wc = write.count; wt = write.totalNanos; we = write.errorCount; wq = write.queue;
@@ -216,8 +245,14 @@ public final class SqlExecutionMonitor {
                 StatementStat s = e.getValue();
                 statements.add(new StatementSnapshot(e.getKey(), s.kind, s.count, s.totalNanos, s.maxNanos, originOf(s.sawBackoffice, s.sawFrontoffice)));
             }
+            // Recent errors newest-first (descending over the FIFO), so the drill-down leads with the latest.
+            errors = new ArrayList<>(recentErrors.size());
+            for (Iterator<ErrorEntry> it = recentErrors.descendingIterator(); it.hasNext(); ) {
+                ErrorEntry e = it.next();
+                errors.add(new ErrorSnapshot(e.epochMillis, e.kind, e.statement, e.message, originOf(e.backoffice)));
+            }
         }
-        return new Snapshot(kindSnapshot(rc, rt, re, rq), kindSnapshot(wc, wt, we, wq), statements, flights);
+        return new Snapshot(kindSnapshot(rc, rt, re, rq), kindSnapshot(wc, wt, we, wq), statements, flights, errors);
     }
 
     private static KindSnapshot kindSnapshot(long count, long totalNanos, long errorCount, AsyncQueue q) {
@@ -251,6 +286,23 @@ public final class SqlExecutionMonitor {
             this.statement = statement;
             this.startNanos = startNanos;
             this.cancelHandle = cancelHandle;
+            this.backoffice = backoffice;
+        }
+    }
+
+    /** One recorded SQL failure kept in the recent-errors ring buffer (server-internal). */
+    private static final class ErrorEntry {
+        private final long epochMillis;   // wall-clock time of the failure
+        private final Kind kind;
+        private final String statement;
+        private final String message;     // already truncated
+        private final Boolean backoffice; // caller origin: TRUE=BO, FALSE=FO, null=unknown
+
+        ErrorEntry(long epochMillis, Kind kind, String statement, String message, Boolean backoffice) {
+            this.epochMillis = epochMillis;
+            this.kind = kind;
+            this.statement = statement;
+            this.message = message;
             this.backoffice = backoffice;
         }
     }
@@ -302,7 +354,11 @@ public final class SqlExecutionMonitor {
     /** A currently-executing SQL statement, with how long it has been running. {@code origin} = bo/fo/null. */
     public record InFlightSnapshot(long id, Kind kind, String statement, long ageMillis, String origin) {}
 
-    /** Immutable snapshot of read/write execution, the top statements, and the in-flight queries. */
+    /** One recent SQL failure for the "Errors" drill-down. {@code origin} = bo/fo/null; newest first in the snapshot. */
+    public record ErrorSnapshot(long epochMillis, Kind kind, String statement, String message, String origin) {}
+
+    /** Immutable snapshot of read/write execution, the top statements, the in-flight queries, and recent errors. */
     public record Snapshot(KindSnapshot read, KindSnapshot write,
-                           List<StatementSnapshot> topStatements, List<InFlightSnapshot> inFlight) {}
+                           List<StatementSnapshot> topStatements, List<InFlightSnapshot> inFlight,
+                           List<ErrorSnapshot> recentErrors) {}
 }

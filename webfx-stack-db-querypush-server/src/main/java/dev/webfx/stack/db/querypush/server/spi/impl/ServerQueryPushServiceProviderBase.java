@@ -15,6 +15,7 @@ import dev.webfx.platform.util.Numbers;
 import dev.webfx.stack.db.querypush.ActiveDbQueryInfo;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
+import dev.webfx.stack.db.querypush.DbErrorMonitorInfo;
 import dev.webfx.stack.db.querypush.InFlightQueryMonitorInfo;
 import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
@@ -184,6 +185,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildProfileDistribution(connectedClients, PROFILE_OS),
             buildProfileDistribution(connectedClients, PROFILE_DEVICE),
             buildSignInStatusDistribution(connectedClients),
+            buildClientAppDistribution(connectedClients),
             buildSystemResourceInfo());
     }
 
@@ -469,6 +471,23 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         return LogoutUserId.isLogoutUserIdOrNull(userId) ? SIGN_IN_ANONYMOUS : userId.getClass().getSimpleName();
     }
 
+    /**
+     * Connected-clients breakdown by app: "bo" (back-office) vs "fo" (front-office). Only a back-office
+     * build sets the backoffice flag to TRUE; a front-office build leaves it null (it never sends
+     * false), so anything non-TRUE is front-office — the same reading as {@code ThreadLocalStateHolder
+     * .isBackoffice()} used elsewhere. Every connected client is one or the other, so there's no
+     * "unknown" bucket (a client that hasn't reported the flag yet is counted as front-office).
+     */
+    private static NameCountInfo[] buildClientAppDistribution(List<PushClientMetadata> connectedClients) {
+        // LinkedHashMap keeps a stable, meaningful order (bo, fo) for display.
+        Map<String, Integer> counts = new LinkedHashMap<>();
+        counts.put("bo", 0);
+        counts.put("fo", 0);
+        for (PushClientMetadata c : connectedClients)
+            counts.merge(Boolean.TRUE.equals(c.getBackoffice()) ? "bo" : "fo", 1, Integer::sum);
+        return toNameCounts(counts);
+    }
+
     private static NameCountInfo[] toNameCounts(Map<String, Integer> counts) {
         NameCountInfo[] result = new NameCountInfo[counts.size()];
         int i = 0;
@@ -580,7 +599,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         SqlAnalyzeResultInfo[] analyze = new SqlAnalyzeResultInfo[ar.size()];
         for (int i = 0; i < analyze.length; i++)
             analyze[i] = toAnalyzeInfo(ar.get(i), now);
-        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights, analyze);
+        List<SqlExecutionMonitor.ErrorSnapshot> es = s.recentErrors();
+        DbErrorMonitorInfo[] errors = new DbErrorMonitorInfo[es.size()];
+        for (int i = 0; i < errors.length; i++) {
+            SqlExecutionMonitor.ErrorSnapshot e = es.get(i);
+            errors[i] = new DbErrorMonitorInfo(e.epochMillis(), kindName(e.kind()), e.statement(), e.message(), e.origin());
+        }
+        return new SqlExecutionMonitorInfo(toKindInfo(s.read()), toKindInfo(s.write()), statements, flights, analyze, errors);
     }
 
     private static String kindName(SqlExecutionMonitor.Kind k) {

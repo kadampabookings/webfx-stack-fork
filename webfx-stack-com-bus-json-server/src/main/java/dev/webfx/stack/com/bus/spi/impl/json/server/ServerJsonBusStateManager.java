@@ -87,12 +87,13 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
 
     /**
      * Notified when a client is confirmed live, carrying its runId plus the session facts the push
-     * layer records for the /monitor page (current userId, build version, PWA mode) — without this
-     * module depending on it. {@code userId} reflects the session's CURRENT login (re-read each tick).
+     * layer records for the /monitor page (current userId, build version, PWA mode, device profile,
+     * BO/FO app) — without this module depending on it. {@code userId} reflects the session's CURRENT
+     * login (re-read each tick).
      */
     @FunctionalInterface
     public interface ClientLiveListener {
-        void onClientLive(Object runId, Object userId, String clientVersion, Boolean pwa, String clientProfile);
+        void onClientLive(Object runId, Object userId, String clientVersion, Boolean pwa, String clientProfile, Boolean backoffice);
     }
 
     private static ClientLiveListener clientLiveListener;
@@ -113,7 +114,7 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
                 // Read the invariant client facts from the session (the client sent them once at
                 // connection). Re-supplied on every live tick so a push entry created after connect
                 // still picks them up.
-                clientLiveListener.onClientLive(runId, SessionAccessor.getUserId(session), SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session), SessionAccessor.getClientProfile(session));
+                clientLiveListener.onClientLive(runId, SessionAccessor.getUserId(session), SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session), SessionAccessor.getClientProfile(session), SessionAccessor.isBackoffice(session));
                 return true; // to tell that we found the runId
             }
             Console.warn("ServerJsonBusStateManager.clientIsLive() was called but no runId could be found (session id = " + session.id() + ", ping = " + ping + ")");
