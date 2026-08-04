@@ -5,6 +5,7 @@ module webfx.stack.db.querypush.server {
     // Direct dependencies modules
     requires jdk.management;
     requires webfx.platform.async;
+    requires webfx.platform.boot;
     requires webfx.platform.console;
     requires webfx.platform.scheduler;
     requires webfx.platform.util;

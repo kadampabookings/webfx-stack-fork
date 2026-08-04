@@ -12,7 +12,9 @@ import dev.webfx.stack.db.query.QueryService;
 import dev.webfx.stack.db.query.SqlAnalyzeRegistry;
 import dev.webfx.stack.db.query.SqlExecutionMonitor;
 import dev.webfx.platform.util.Numbers;
+import dev.webfx.platform.boot.ApplicationJobFailures;
 import dev.webfx.stack.db.querypush.ActiveDbQueryInfo;
+import dev.webfx.stack.db.querypush.BootJobFailureMonitorInfo;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.DatabaseHealthMonitorInfo;
 import dev.webfx.stack.db.querypush.DbErrorMonitorInfo;
@@ -186,7 +188,24 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildProfileDistribution(connectedClients, PROFILE_DEVICE),
             buildSignInStatusDistribution(connectedClients),
             buildClientAppDistribution(connectedClients),
-            buildSystemResourceInfo());
+            buildSystemResourceInfo(),
+            buildBootFailures());
+    }
+
+    /**
+     * Maps this task's retained boot-job failures (from the platform boot layer) into wire DTOs for the
+     * /monitor "Boot" card. Empty on a clean boot; a non-empty list means one or more application jobs
+     * threw during init/start and the task is only partially functional. Per server process, so it
+     * reflects the exact task the page is connected to.
+     */
+    private static BootJobFailureMonitorInfo[] buildBootFailures() {
+        List<ApplicationJobFailures.Failure> fs = ApplicationJobFailures.snapshot();
+        BootJobFailureMonitorInfo[] failures = new BootJobFailureMonitorInfo[fs.size()];
+        for (int i = 0; i < failures.length; i++) {
+            ApplicationJobFailures.Failure f = fs.get(i);
+            failures[i] = new BootJobFailureMonitorInfo(f.getEpochMillis(), f.getPhase(), f.getJobName(), f.getMessage(), f.getStackTrace());
+        }
+        return failures;
     }
 
     /**

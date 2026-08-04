@@ -3,6 +3,7 @@ package dev.webfx.stack.db.querypush.buscall.serial;
 import dev.webfx.platform.ast.AstObject;
 import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.stack.com.serial.spi.impl.SerialCodecBase;
+import dev.webfx.stack.db.querypush.BootJobFailureMonitorInfo;
 import dev.webfx.stack.db.querypush.CompressionMonitorInfo;
 import dev.webfx.stack.db.querypush.NameCountInfo;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
@@ -26,6 +27,7 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
     private static final String CLIENT_SIGN_IN_STATUSES_KEY = "clientSignInStatuses";
     private static final String CLIENT_APPS_KEY = "clientApps";
     private static final String SYSTEM_RESOURCE_KEY = "systemResource";
+    private static final String BOOT_FAILURES_KEY = "bootFailures";
 
     public QueryPushMonitorInfoSerialCodec() {
         super(QueryPushMonitorInfo.class, CODEC_ID);
@@ -47,6 +49,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
         encodeArray(  serial, CLIENT_DEVICE_TYPES_KEY,    arg.getClientDeviceTypes());
         encodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, arg.getClientSignInStatuses());
         encodeArray(  serial, CLIENT_APPS_KEY,            arg.getClientApps());
+        // Null/empty on a clean boot — encodeArray skips null, decodeArray returns null on older servers.
+        encodeArray(  serial, BOOT_FAILURES_KEY,          arg.getBootFailures());
     }
 
     @Override
@@ -64,7 +68,8 @@ public final class QueryPushMonitorInfoSerialCodec extends SerialCodecBase<Query
                 decodeArray(  serial, CLIENT_DEVICE_TYPES_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_SIGN_IN_STATUSES_KEY, NameCountInfo.class),
                 decodeArray(  serial, CLIENT_APPS_KEY, NameCountInfo.class),
-                (SystemResourceMonitorInfo) decodeObject(serial, SYSTEM_RESOURCE_KEY)
+                (SystemResourceMonitorInfo) decodeObject(serial, SYSTEM_RESOURCE_KEY),
+                decodeArray(  serial, BOOT_FAILURES_KEY, BootJobFailureMonitorInfo.class)
         );
     }
 
