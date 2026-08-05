@@ -12,6 +12,8 @@ import dev.webfx.stack.session.state.SessionAccessor;
 import dev.webfx.stack.session.state.StateAccessor;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -20,6 +22,14 @@ import java.util.Objects;
 public final class ServerSideStateSessionSyncer {
 
     private final static boolean LOG_STATES = false; // Set to true to log incoming and outgoing states on the server side
+
+    // On (re)connection the client re-sends its full state on EVERY message queued until the first server
+    // reply, and the session's userId/runId are only stored once the async userIdChecker completes — so all
+    // messages arriving in that window would each re-fire the checker AND the authorizer (a burst of SQL per
+    // client on every deploy). This map memoizes the in-flight check per server session so messages 2..N
+    // await the single check + authorization push. Single-threaded access (Vert.x event loop) => plain HashMap.
+    private record PendingUserIdCheck(Object userId, Future<IsolatedSession> future) {}
+    private static final Map<String, PendingUserIdCheck> pendingUserIdChecks = new HashMap<>();
 
     private static AsyncFunction<Object, Object> userIdChecker;
 
@@ -117,7 +127,14 @@ public final class ServerSideStateSessionSyncer {
             return future;
         }
         // Case when the user is set => login or user switch, or logout (LOGOUT_USER_ID)
-        return ThreadLocalStateHolder.runWithState(clientState, () -> userIdChecker.apply(userId))
+        // Dedup: if the same check is already in flight for this session (parallel messages of the same
+        // (re)connection burst), the later messages just await its outcome — checker, session sync and
+        // authorization push all run exactly once.
+        String sessionId = serverSession.id();
+        PendingUserIdCheck pendingCheck = pendingUserIdChecks.get(sessionId);
+        if (pendingCheck != null && Objects.equals(pendingCheck.userId, userId))
+            return pendingCheck.future;
+        Future<IsolatedSession> checkFuture = ThreadLocalStateHolder.runWithState(clientState, () -> userIdChecker.apply(userId))
             // If the user identity check failed (ex: no such user exception), we log out the user
             .recover(e -> Future.succeededFuture(LogoutUserId.LOGOUT_USER_ID))
             .compose(finalUserId -> {
@@ -148,6 +165,13 @@ public final class ServerSideStateSessionSyncer {
                 });
                 return future;
             });
+        pendingUserIdChecks.put(sessionId, new PendingUserIdCheck(userId, checkFuture));
+        checkFuture.onComplete(ar -> {
+            PendingUserIdCheck current = pendingUserIdChecks.get(sessionId);
+            if (current != null && current.future == checkFuture)
+                pendingUserIdChecks.remove(sessionId);
+        });
+        return checkFuture;
     }
 
     private static Future<IsolatedSession> syncFixedServerSessionFromIncomingClientState(IsolatedSession serverSession, Object clientState, boolean forceStore) {

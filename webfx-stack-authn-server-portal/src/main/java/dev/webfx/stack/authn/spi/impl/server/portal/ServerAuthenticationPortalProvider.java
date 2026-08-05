@@ -66,12 +66,37 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
         return Future.failedFuture("verifyAuthenticated() failed on server authentication portal because no server gateway accepted UserId " + ThreadLocalStateHolder.getUserId());
     }
 
+    // The same user claims are requested several times within seconds on each (re)connection (authorization
+    // push + client getUserDetails + re-verification), and by ALL clients at once after a deploy. A pending
+    // future dedups concurrent requests; a completed one is served for a short TTL. Claims change only through
+    // updateCredentials(), which evicts the caller's entry.
+    private static final long USER_CLAIMS_CACHE_TTL_MILLIS = 60_000;
+
+    private record CachedClaims(Future<UserClaims> future, long computedAtMillis) {}
+    private final Map<Object, CachedClaims> userClaimsCache = new HashMap<>();
+
     @Override
     public Future<UserClaims> getUserClaims() {
+        Object userId = ThreadLocalStateHolder.getUserId();
+        CachedClaims cached = userClaimsCache.get(userId);
+        long now = System.currentTimeMillis();
+        if (cached != null && (!cached.future.isComplete() || cached.future.succeeded() && now - cached.computedAtMillis < USER_CLAIMS_CACHE_TTL_MILLIS))
+            return cached.future;
+        if (userClaimsCache.size() > 100) // expired entries are otherwise only replaced in place
+            userClaimsCache.values().removeIf(c -> c.future.isComplete() && now - c.computedAtMillis >= USER_CLAIMS_CACHE_TTL_MILLIS);
         for (ServerAuthenticationGateway gateway : getGateways()) {
             boolean accepts = gateway.acceptsUserId();
-            if (accepts)
-                return gateway.getUserClaims();
+            if (accepts) {
+                Future<UserClaims> future = gateway.getUserClaims();
+                userClaimsCache.put(userId, new CachedClaims(future, now));
+                // A failed load must not be served to subsequent callers
+                future.onFailure(e -> {
+                    CachedClaims current = userClaimsCache.get(userId);
+                    if (current != null && current.future == future)
+                        userClaimsCache.remove(userId);
+                });
+                return future;
+            }
         }
         return Future.failedFuture("getUserClaims() failed on server authentication portal because no server gateway accepted UserId " + ThreadLocalStateHolder.getUserId());
     }
@@ -81,8 +106,15 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
         for (ServerAuthenticationGateway gateway : getGateways()) {
             //boolean acceptsUserId = gateway.acceptsUserId();
             boolean acceptsArgument = gateway.acceptsUpdateCredentialsArgument(updateCredentialsArgument);
-            if (/*acceptsUserId &&*/ acceptsArgument)
-                return gateway.updateCredentials(updateCredentialsArgument);
+            if (/*acceptsUserId &&*/ acceptsArgument) {
+                // Credentials updates change the claims (email/username/phone), so the cached ones are evicted
+                Object userId = ThreadLocalStateHolder.getUserId();
+                return gateway.updateCredentials(updateCredentialsArgument)
+                        .map(result -> {
+                            userClaimsCache.remove(userId);
+                            return result;
+                        });
+            }
         }
         return Future.failedFuture("No server authentication gateway found accepting credentials update " + updateCredentialsArgument);
     }

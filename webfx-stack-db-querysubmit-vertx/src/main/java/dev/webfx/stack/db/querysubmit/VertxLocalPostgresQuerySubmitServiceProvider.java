@@ -53,15 +53,21 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
     private final SqlExecutionMonitor.Kind monitorKind; // READ for queries, WRITE for submits
 
     public VertxLocalPostgresQuerySubmitServiceProvider(LocalDataSource localDataSource, boolean submit) {
-        int poolSize = submit ? SUBMIT_POOL_SIZE : QUERY_POOL_SIZE;
+        ConnectionDetails cd = localDataSource.getLocalConnectionDetails();
+        // The pool size (= max parallel SQL operations, as the AsyncQueue cap is kept 1:1 with the
+        // connection pool max) can be tuned per environment through the datasource configuration;
+        // when unset (-1) the historical defaults apply.
+        int configuredPoolSize = submit ? cd.getSubmitPoolSize() : cd.getQueryPoolSize();
+        int poolSize = configuredPoolSize > 0 ? configuredPoolSize : (submit ? SUBMIT_POOL_SIZE : QUERY_POOL_SIZE);
         asyncQueue = new AsyncQueue(poolSize, "POSTGRES-" + (submit ? "SUBMIT" : "QUERY"))
             .setExecutionTimeout(SQL_OPERATION_TIMEOUT_MILLIS);
+        // Logged AFTER the queue is built — this.log() delegates to asyncQueue.log()
+        log("Pool size = " + poolSize + (configuredPoolSize > 0 ? " (from configuration)" : " (default)"));
         // Register this queue for /monitor so the snapshot can read its live depth, and remember
         // the kind so completed operations are counted as reads (queries) or writes (submits).
         monitorKind = submit ? SqlExecutionMonitor.Kind.WRITE : SqlExecutionMonitor.Kind.READ;
         SqlExecutionMonitor.get().registerQueue(monitorKind, asyncQueue);
 
-        ConnectionDetails cd = localDataSource.getLocalConnectionDetails();
         PgConnectOptions connectOptions = new PgConnectOptions()
             .setPort(cd.getPort())
             .setHost(cd.getHost())
