@@ -6,9 +6,12 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Process-wide monitoring of local SQL execution — reads (queries / SELECT) and writes
@@ -99,11 +102,27 @@ public final class SqlExecutionMonitor {
     // ── In-flight registry + per-statement rollup (drives the /monitor drill-down and,
     //    via the stored cancel handle, a future query-cancellation feature) ──────────────
 
-    /** Default number of top statements returned by {@link #snapshot()}. */
+    /** Default number of top statements returned <em>per (kind × metric)</em> by {@link #snapshot()}. */
     public static final int DEFAULT_TOP_STATEMENTS = 20;
 
-    /** Cap on distinct statements tracked; past this, the smallest-total entry is evicted. */
-    private static final int MAX_TRACKED_STATEMENTS = 256;
+    /**
+     * Minimum executions before a statement is eligible for the avg/max rankings. A single cold-cache
+     * or one-off execution can be arbitrarily slow; requiring a few runs keeps the "slowest" views to
+     * <em>chronically</em> slow statements rather than one-time outliers. The by-total ranking has no
+     * such floor (it's about accumulated time, where a rare statement can't dominate anyway).
+     */
+    private static final int MIN_RANKED_COUNT = 3;
+
+    /** Cap on distinct statements tracked; past this, an unprotected entry is evicted (see {@link #evictStatement()}). */
+    private static final int MAX_TRACKED_STATEMENTS = 512;
+
+    /**
+     * On eviction, the slowest-by-max statements are protected so the avg/max drill-down stays
+     * reliable: a slow-but-rare query has a small <em>total</em> time and would otherwise be the first
+     * evicted — losing exactly the query an admin is hunting. We keep this many slowest-by-max and
+     * evict the smallest-total among the rest.
+     */
+    private static final int EVICTION_PROTECTED_BY_MAX = 64;
 
     /** Newest failed operations retained for the "Errors" drill-down (older ones evicted). */
     private static final int MAX_RECENT_ERRORS = 50;
@@ -138,7 +157,7 @@ public final class SqlExecutionMonitor {
         StatementStat stat = statementStats.get(f.statement);
         if (stat == null) {
             if (statementStats.size() >= MAX_TRACKED_STATEMENTS)
-                evictSmallestStatement();
+                evictStatement();
             statementStats.put(f.statement, stat = new StatementStat(f.kind));
         }
         stat.count++;
@@ -198,17 +217,86 @@ public final class SqlExecutionMonitor {
         return false;
     }
 
-    private void evictSmallestStatement() {
+    /**
+     * Evicts one statement to make room, PROTECTING the slowest-by-max so the avg/max drill-down stays
+     * reliable. A slow-but-rare query has a small total time and, under a naive smallest-total eviction,
+     * would be the first dropped — losing exactly the query an admin is hunting. So we keep the
+     * {@link #EVICTION_PROTECTED_BY_MAX} slowest-by-max and evict the smallest-total among the rest
+     * (falling back to the smallest-total overall in the corner case where everything is protected).
+     */
+    private void evictStatement() {
+        Set<String> protectedByMax = topStatementKeysByMax(EVICTION_PROTECTED_BY_MAX);
+        String victim = smallestTotalKey(protectedByMax);
+        if (victim == null) // everything is protected (cap ≤ protected size) — evict smallest-total overall
+            victim = smallestTotalKey(null);
+        if (victim != null)
+            statementStats.remove(victim);
+    }
+
+    /** The key of the smallest-total statement not in {@code exclude} (null → consider all), or null. */
+    private String smallestTotalKey(Set<String> exclude) {
         String smallest = null;
         long min = Long.MAX_VALUE;
         for (Map.Entry<String, StatementStat> e : statementStats.entrySet()) {
+            if (exclude != null && exclude.contains(e.getKey()))
+                continue;
             if (e.getValue().totalNanos < min) {
                 min = e.getValue().totalNanos;
                 smallest = e.getKey();
             }
         }
-        if (smallest != null)
-            statementStats.remove(smallest);
+        return smallest;
+    }
+
+    /** The keys of the {@code n} statements with the largest max time (the ones to protect from eviction). */
+    private Set<String> topStatementKeysByMax(int n) {
+        List<Map.Entry<String, StatementStat>> entries = new ArrayList<>(statementStats.entrySet());
+        entries.sort(Comparator.comparingLong((Map.Entry<String, StatementStat> e) -> e.getValue().maxNanos).reversed());
+        Set<String> keys = new HashSet<>();
+        int limit = Math.min(Math.max(0, n), entries.size());
+        for (int i = 0; i < limit; i++)
+            keys.add(entries.get(i).getKey());
+        return keys;
+    }
+
+    /** Which metric a top-N selection ranks statements by (see {@link #collectTopStatementKeys}). */
+    private enum MetricRank { TOTAL, AVG, MAX }
+
+    /** Average nanos per execution — the ranking value for {@link MetricRank#AVG}. */
+    private static double avgNanos(StatementStat s) {
+        return s.count > 0 ? (double) s.totalNanos / s.count : 0;
+    }
+
+    /**
+     * Adds the keys of the top-{@code n} statements of the given {@code kind}, ranked by {@code metric}
+     * (descending), to {@code out} — considering only statements with at least {@code minCount} runs.
+     * A dedup set on the caller's side means overlapping rankings (a query that leads by both total and
+     * max) contribute their key just once.
+     */
+    private void collectTopStatementKeys(Set<String> out, Kind kind, int n, MetricRank metric, long minCount) {
+        List<Map.Entry<String, StatementStat>> entries = new ArrayList<>();
+        for (Map.Entry<String, StatementStat> e : statementStats.entrySet()) {
+            StatementStat s = e.getValue();
+            if (s.kind == kind && s.count >= minCount)
+                entries.add(e);
+        }
+        Comparator<Map.Entry<String, StatementStat>> desc;
+        switch (metric) {
+            case AVG:
+                desc = (a, b) -> Double.compare(avgNanos(b.getValue()), avgNanos(a.getValue()));
+                break;
+            case MAX:
+                desc = (a, b) -> Long.compare(b.getValue().maxNanos, a.getValue().maxNanos);
+                break;
+            case TOTAL:
+            default:
+                desc = (a, b) -> Long.compare(b.getValue().totalNanos, a.getValue().totalNanos);
+                break;
+        }
+        entries.sort(desc);
+        int limit = Math.min(Math.max(0, n), entries.size());
+        for (int i = 0; i < limit; i++)
+            out.add(entries.get(i).getKey());
     }
 
     /** Immutable snapshot with the default top-statements count. */
@@ -236,14 +324,23 @@ public final class SqlExecutionMonitor {
             for (InFlight f : inFlight.values()) {
                 flights.add(new InFlightSnapshot(f.id, f.kind, f.statement, (nowNanos - f.startNanos) / 1_000_000L, originOf(f.backoffice)));
             }
-            List<Map.Entry<String, StatementStat>> entries = new ArrayList<>(statementStats.entrySet());
-            entries.sort(Comparator.comparingLong((Map.Entry<String, StatementStat> e) -> e.getValue().totalNanos).reversed());
-            int limit = Math.min(Math.max(0, topStatements), entries.size());
-            statements = new ArrayList<>(limit);
-            for (int i = 0; i < limit; i++) {
-                Map.Entry<String, StatementStat> e = entries.get(i);
-                StatementStat s = e.getValue();
-                statements.add(new StatementSnapshot(e.getKey(), s.kind, s.count, s.totalNanos, s.maxNanos, originOf(s.sawBackoffice, s.sawFrontoffice)));
+            // Statements worth surfacing: for EACH kind, the union of the top-N by total time (where DB
+            // time goes), by average time (chronically slow), and by max time (worst single run). The
+            // client's "rank by" toggle then presents the true top-N for whichever metric it shows — a
+            // query that leads by avg is usually far down the by-total list, so a single by-total ranking
+            // (as before) hid the slow-but-infrequent queries an admin is hunting. Avg/max are ranked
+            // only among statements with at least MIN_RANKED_COUNT runs (a lone cold outlier isn't a
+            // chronic problem). LinkedHashSet dedups while keeping a stable order.
+            Set<String> selectedKeys = new LinkedHashSet<>();
+            for (Kind kind : Kind.values()) {
+                collectTopStatementKeys(selectedKeys, kind, topStatements, MetricRank.TOTAL, 1);
+                collectTopStatementKeys(selectedKeys, kind, topStatements, MetricRank.AVG, MIN_RANKED_COUNT);
+                collectTopStatementKeys(selectedKeys, kind, topStatements, MetricRank.MAX, MIN_RANKED_COUNT);
+            }
+            statements = new ArrayList<>(selectedKeys.size());
+            for (String key : selectedKeys) {
+                StatementStat s = statementStats.get(key);
+                statements.add(new StatementSnapshot(key, s.kind, s.count, s.totalNanos, s.maxNanos, originOf(s.sawBackoffice, s.sawFrontoffice)));
             }
             // Recent errors newest-first (descending over the FIFO), so the drill-down leads with the latest.
             errors = new ArrayList<>(recentErrors.size());
