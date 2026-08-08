@@ -20,6 +20,7 @@ public final class QueryArgumentSerialCodec extends SerialCodecBase<QueryArgumen
     private static final String PRIORITY_KEY = "priority";
     private static final String CALL_ID_KEY = "callId";
     private static final String CALL_SEQ_KEY = "callSeq";
+    private static final String SHED_WHEN_BUSY_KEY = "shedWhenBusy";
 
     public QueryArgumentSerialCodec() {
         super(QueryArgument.class, CODEC_ID);
@@ -42,6 +43,8 @@ public final class QueryArgumentSerialCodec extends SerialCodecBase<QueryArgumen
         encodeInteger(serial, PRIORITY_KEY, arg.getPriority(), QueryArgument.STANDARD_PRIORITY);
         encodeInteger(serial, CALL_ID_KEY, arg.getCallId(), 0);
         encodeInteger(serial, CALL_SEQ_KEY, arg.getCallSeq(), 0);
+        if (arg.isShedWhenBusy()) // omit at default (false) — absent key decodes to false on any server version
+            encodeBoolean(serial, SHED_WHEN_BUSY_KEY, true);
     }
 
     @Override
@@ -59,7 +62,8 @@ public final class QueryArgumentSerialCodec extends SerialCodecBase<QueryArgumen
             hasDqlRuntime == null || hasDqlRuntime, // default to true when absent
             decodeInteger(serial, PRIORITY_KEY, QueryArgument.STANDARD_PRIORITY),
             decodeInteger(serial, CALL_ID_KEY, 0),
-            decodeInteger(serial, CALL_SEQ_KEY, 0)
+            decodeInteger(serial, CALL_SEQ_KEY, 0),
+            decodeBooleanSafe(serial, SHED_WHEN_BUSY_KEY) // default to false when absent
         );
     }
 }

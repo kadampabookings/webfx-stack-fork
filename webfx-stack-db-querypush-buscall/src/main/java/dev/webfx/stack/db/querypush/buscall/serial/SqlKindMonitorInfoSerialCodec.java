@@ -15,6 +15,7 @@ public final class SqlKindMonitorInfoSerialCodec extends SerialCodecBase<SqlKind
     private static final String EXECUTING_KEY = "executing";
     private static final String MAX_CONCURRENCY_KEY = "maxConcurrency";
     private static final String PEAK_WAITING_KEY = "peakWaiting";
+    private static final String SHED_KEY = "shed";
 
     public SqlKindMonitorInfoSerialCodec() {
         super(SqlKindMonitorInfo.class, CODEC_ID);
@@ -29,6 +30,7 @@ public final class SqlKindMonitorInfoSerialCodec extends SerialCodecBase<SqlKind
         encodeInteger(serial, EXECUTING_KEY,       arg.getExecuting());
         encodeInteger(serial, MAX_CONCURRENCY_KEY, arg.getMaxConcurrency());
         encodeInteger(serial, PEAK_WAITING_KEY,    arg.getPeakWaiting());
+        encodeInteger(serial, SHED_KEY,            arg.getShed());
     }
 
     @Override
@@ -40,7 +42,8 @@ public final class SqlKindMonitorInfoSerialCodec extends SerialCodecBase<SqlKind
             decodeInteger(serial, WAITING_KEY, 0),
             decodeInteger(serial, EXECUTING_KEY, 0),
             decodeInteger(serial, MAX_CONCURRENCY_KEY, 0),
-            decodeInteger(serial, PEAK_WAITING_KEY, 0));
+            decodeInteger(serial, PEAK_WAITING_KEY, 0),
+            decodeInteger(serial, SHED_KEY, 0)); // absent on older servers -> 0
     }
 
     private static long orZero(Long l) {

@@ -111,7 +111,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
     public Future<QueryResult> executeQuery(QueryArgument argument) {
         Object runId = ThreadLocalStateHolder.getRunId();
         Boolean backoffice = callerBackoffice(runId);
-        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), coalescingKey(argument, runId), arg -> executeQueryNow(arg, backoffice));
+        // shedWhenBusy => the queue rejects fast ("ServerBusy" error) instead of queueing when at
+        // capacity — the caller marked this query as an optional revalidation with a cached fallback.
+        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), coalescingKey(argument, runId), arg -> executeQueryNow(arg, backoffice), argument.isShedWhenBusy());
     }
 
     /**

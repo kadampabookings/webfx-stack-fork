@@ -36,20 +36,25 @@ public final class QueryArgument {
     private final int priority; // execution priority for the server-side AsyncQueue; higher value = sooner; STANDARD_PRIORITY (0) is the default
     private final int callId; // caller identity (one per ReactiveQueryCall instance); the server combines it with the client's runId to derive a stable coalescing key. 0 means unset (no coalescing).
     private final int callSeq; // per-fire sequence number; the server echoes it in the QueryResult so the caller can filter out stale results. 0 means unset.
+    private final boolean shedWhenBusy; // when true, the server rejects this query fast (instead of queueing) if its executor is at capacity — for optional revalidations whose caller holds a cached fallback
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, false, true, STANDARD_PRIORITY, 0, 0);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, false, true, STANDARD_PRIORITY, 0, 0, false);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, true, STANDARD_PRIORITY, 0, 0);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, true, STANDARD_PRIORITY, 0, 0, false);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime) {
-        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, STANDARD_PRIORITY, 0, 0);
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, STANDARD_PRIORITY, 0, 0, false);
     }
 
     public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime, int priority, int callId, int callSeq) {
+        this(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, priority, callId, callSeq, false);
+    }
+
+    public QueryArgument(QueryArgument originalArgument, Object dataSourceId, DataScope dataScope, String language, String statement, Object[] parameters, String[] parameterNames, boolean sendMetadata, boolean hasDqlRuntime, int priority, int callId, int callSeq, boolean shedWhenBusy) {
         this.originalArgument = originalArgument;
         this.dataSourceId = dataSourceId;
         this.dataScope = dataScope;
@@ -62,6 +67,7 @@ public final class QueryArgument {
         this.priority = priority;
         this.callId = callId;
         this.callSeq = callSeq;
+        this.shedWhenBusy = shedWhenBusy;
     }
 
     public QueryArgument getOriginalArgument() {
@@ -122,6 +128,16 @@ public final class QueryArgument {
      */
     public int getCallSeq() {
         return callSeq;
+    }
+
+    /**
+     * When true, the server rejects this query fast (a "ServerBusy"-prefixed error) instead of queueing it when its
+     * executor is at capacity. For optional background revalidations whose caller holds a cached fallback — under
+     * load, shedding them at the door protects mandatory queries instead of letting optional ones pile up.
+     * Default is false (the query queues normally).
+     */
+    public boolean isShedWhenBusy() {
+        return shedWhenBusy;
     }
 
     @Override

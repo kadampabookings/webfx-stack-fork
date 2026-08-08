@@ -644,7 +644,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
     private static SqlKindMonitorInfo toKindInfo(SqlExecutionMonitor.KindSnapshot k) {
         return new SqlKindMonitorInfo(k.count(), k.totalNanos(), k.errorCount(),
-            k.waiting(), k.executing(), k.maxConcurrency(), k.peakWaiting());
+            k.waiting(), k.executing(), k.maxConcurrency(), k.peakWaiting(), k.shed());
     }
 
     /** Builds the compression DTO from the process-wide {@link CompressionMetrics}. */

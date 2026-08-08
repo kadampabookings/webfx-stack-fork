@@ -358,7 +358,8 @@ public final class SqlExecutionMonitor {
             q == null ? 0 : q.getWaitingCount(),
             q == null ? 0 : q.getExecutingCount(),
             q == null ? 0 : q.getExecutingQueueMaxSize(),
-            q == null ? 0 : q.getPeakWaitingCount());
+            q == null ? 0 : q.getPeakWaitingCount(),
+            q == null ? 0 : q.getShedCount());
     }
 
     private static final class KindCounters {
@@ -440,7 +441,7 @@ public final class SqlExecutionMonitor {
      * {@code peakWaiting} high-water mark). Rates are derived client-side from poll-to-poll deltas.
      */
     public record KindSnapshot(long count, long totalNanos, long errorCount,
-                               int waiting, int executing, int maxConcurrency, int peakWaiting) {}
+                               int waiting, int executing, int maxConcurrency, int peakWaiting, int shed) {}
 
     /**
      * Per-statement snapshot (ranked by total time). {@code statement} is already parameter-free

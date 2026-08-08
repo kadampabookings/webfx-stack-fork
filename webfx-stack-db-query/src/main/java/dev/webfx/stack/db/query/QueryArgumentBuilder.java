@@ -19,6 +19,7 @@ public final class QueryArgumentBuilder {
     private int priority = QueryArgument.STANDARD_PRIORITY;
     private int callId;
     private int callSeq;
+    private boolean shedWhenBusy;
 
     public QueryArgumentBuilder setOriginalArgument(QueryArgument originalArgument) {
         this.originalArgument = originalArgument;
@@ -84,6 +85,11 @@ public final class QueryArgumentBuilder {
         return this;
     }
 
+    public QueryArgumentBuilder setShedWhenBusy(boolean shedWhenBusy) {
+        this.shedWhenBusy = shedWhenBusy;
+        return this;
+    }
+
     public QueryArgumentBuilder copy(QueryArgument argument) {
         return setOriginalArgument(argument)
             .setDataSourceId(argument.getDataSourceId())
@@ -97,10 +103,11 @@ public final class QueryArgumentBuilder {
             .setPriority(argument.getPriority())
             .setCallId(argument.getCallId())
             .setCallSeq(argument.getCallSeq())
+            .setShedWhenBusy(argument.isShedWhenBusy())
             ;
     }
 
     public QueryArgument build() {
-        return new QueryArgument(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, priority, callId, callSeq);
+        return new QueryArgument(originalArgument, dataSourceId, dataScope, language, statement, parameters, parameterNames, sendMetadata, hasDqlRuntime, priority, callId, callSeq, shedWhenBusy);
     }
 }

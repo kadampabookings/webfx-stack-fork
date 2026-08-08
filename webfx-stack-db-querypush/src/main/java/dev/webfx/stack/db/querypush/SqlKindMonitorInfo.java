@@ -16,8 +16,9 @@ public final class SqlKindMonitorInfo {
     private final int executing;       // operations currently executing
     private final int maxConcurrency;  // concurrency cap (= pool size)
     private final int peakWaiting;     // high-water mark of `waiting`
+    private final int shed;            // total shedWhenBusy operations rejected at admission (since server start)
 
-    public SqlKindMonitorInfo(long count, long totalNanos, long errorCount, int waiting, int executing, int maxConcurrency, int peakWaiting) {
+    public SqlKindMonitorInfo(long count, long totalNanos, long errorCount, int waiting, int executing, int maxConcurrency, int peakWaiting, int shed) {
         this.count = count;
         this.totalNanos = totalNanos;
         this.errorCount = errorCount;
@@ -25,6 +26,7 @@ public final class SqlKindMonitorInfo {
         this.executing = executing;
         this.maxConcurrency = maxConcurrency;
         this.peakWaiting = peakWaiting;
+        this.shed = shed;
     }
 
     public long getCount() { return count; }
@@ -34,4 +36,5 @@ public final class SqlKindMonitorInfo {
     public int getExecuting() { return executing; }
     public int getMaxConcurrency() { return maxConcurrency; }
     public int getPeakWaiting() { return peakWaiting; }
+    public int getShed() { return shed; }
 }
