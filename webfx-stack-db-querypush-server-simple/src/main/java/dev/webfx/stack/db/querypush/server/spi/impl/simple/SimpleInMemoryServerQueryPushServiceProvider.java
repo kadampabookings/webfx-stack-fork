@@ -11,16 +11,22 @@ import dev.webfx.platform.util.collection.Collections;
 
 import java.util.ArrayList;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * @author Bruno Salmon
  */
 public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQueryPushServiceProviderBase {
     private static int queryStreamIdSeq;
-    private final Map<Object /* queryStreamId */, StreamInfo> streamInfos = new HashMap<>();
-    private final Map<QueryArgument, QueryInfo> queryInfos = new HashMap<>();
+    // ConcurrentHashMap (not HashMap): a write's post-commit pulse iterates queryInfos.values() (see
+    // applyPulseArgument / fetchNextMostUrgentQuery) — and streamInfos.values() in
+    // removePushClientStreams — while other Vert.x event loops open/close streams (put/remove). Plain
+    // HashMap iteration threw ConcurrentModificationException under that concurrency (surfacing on the
+    // high-frequency media_consumption write); ConcurrentHashMap's weakly-consistent iterators are
+    // CME-free. Safe here because neither map ever holds a null key or value.
+    private final Map<Object /* queryStreamId */, StreamInfo> streamInfos = new ConcurrentHashMap<>();
+    private final Map<QueryArgument, QueryInfo> queryInfos = new ConcurrentHashMap<>();
 
     @Override
     protected Future<Object> openStream(QueryPushArgument argument) {
