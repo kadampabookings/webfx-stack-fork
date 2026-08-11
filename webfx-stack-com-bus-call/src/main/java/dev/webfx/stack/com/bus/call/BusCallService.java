@@ -240,15 +240,26 @@ public final class BusCallService {
         return BusCallService.<A, R>registerJavaHandlerForLocalCalls(address, (javaArgument, callerMessage) ->
             ThreadLocalStateHolder.runWithState(callerMessage.state(), () -> {
                     // Calling the java function each time a java object is received
-                    javaAsyncFunction.apply(javaArgument).onComplete(javaAsyncResult -> // the java result of the asynchronous function is now ready
+                    javaAsyncFunction.apply(javaArgument).onComplete(javaAsyncResult -> { // the java result of the asynchronous function is now ready
+                        // A failed endpoint is logged HERE, where the throwable is still intact. Only its
+                        // message survives serialisation (see SerializableAsyncResult's codec) — the type,
+                        // the stack trace and any cause chain are dropped, and the caller receives a bare
+                        // string. So without this the server keeps no record at all of its own failures:
+                        // an endpoint could reject every call it received and leave nothing behind to say
+                        // so, on either side of the wire. Logged unconditionally rather than behind LOGS,
+                        // which is a debug switch for tracing normal traffic; a failure is not normal
+                        // traffic, and the one we needed to see had already happened by the time anyone
+                        // thought to look.
+                        if (javaAsyncResult != null && javaAsyncResult.failed())
+                            Console.error("[BusCallService] Endpoint '" + address + "' failed", javaAsyncResult.cause());
                         // Replying to the caller by sending this java async result to it
                         sendJavaReply(
                             // And making sure that it is serializable using SerializableAsyncResult (but assuming that javaAsyncResult.result() is serializable)
                             SerializableAsyncResult.getSerializableAsyncResult(javaAsyncResult),
                             new DeliveryOptions(),
                             callerMessage
-                        )
-                    );
+                        );
+                    });
                 }
             ));
     }
