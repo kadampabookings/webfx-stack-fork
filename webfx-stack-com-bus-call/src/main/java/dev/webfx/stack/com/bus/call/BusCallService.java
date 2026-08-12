@@ -78,7 +78,12 @@ public final class BusCallService {
                     Message<Object> result = ar.result();
                     if (LOGS)
                         log("Sending result back to client " + busCallArgument.getTargetAddress() + " with result = " + result);
-                    sendJavaReply(new BusCallResult(busCallArgument.getCallNumber(), ar.succeeded() ? result.body() : ar.cause()), new DeliveryOptions(), callerMessage);
+                    // The failure branch goes through asFailedAsyncResult() rather than sending the cause
+                    // itself: a raw throwable reaches a JS client under a codec it can't read and is taken
+                    // for a successful result. This branch is how a target address that never answers —
+                    // including one that hit the internal dispatch timeout — is reported, so it is exactly
+                    // the case that must not read as success.
+                    sendJavaReply(new BusCallResult<>(busCallArgument.getCallNumber(), ar.succeeded() ? result.body() : asFailedAsyncResult(ar.cause())), new DeliveryOptions(), callerMessage);
                 });
             }
         );
@@ -186,7 +191,7 @@ public final class BusCallService {
      *
      * @param <J> expected java class as input for the java handler
      */
-    private static <J, T> Handler<Message<T>> javaHandlerToJsonMessageHandler(BiConsumer<J, Message<T>> javaHandler) {
+    private static <J, T> Handler<Message<T>> javaHandlerToJsonMessageHandler(BiConsumer<J, Message<T>> javaHandler, BiConsumer<Message<T>, Throwable> failureReplier) {
         return jsonMessage -> ThreadLocalStateHolder.runWithState(jsonMessage.state(), () -> {
             try {
                 // Getting the java object from the JSON message
@@ -194,9 +199,89 @@ public final class BusCallService {
                 // and calling the java handler with that java object
                 javaHandler.accept(javaObject, jsonMessage);
             } catch (Throwable throwable) {
-                Console.error(throwable); // what else to do?
+                // Everything that goes wrong before a reply could be sent ends up here: the argument
+                // naming a codec this peer doesn't have (decodeFromJson throws "No SerialCodec found
+                // for id"), the result naming one on the way back out (encodeToJson throws "No
+                // SerialCodec for type"), or the handler itself failing. This used to log and stop,
+                // which left the caller with no reply at all — see replyFailure() for why that is
+                // worse than any of the failures themselves.
+                Console.error("[BusCallService] Call to '" + jsonMessage.address() + "' failed before a reply could be sent", throwable);
+                replyFailure(jsonMessage, throwable, failureReplier);
             }
         });
+    }
+
+    /**
+     * Answers a call that failed before its handler could reply, so that no caller is ever left
+     * waiting on a call that is already over.
+     * <p>
+     * A silent call is the worst of the outcomes available here. The caller cannot tell it apart
+     * from a slow one, so it waits out its full timeout before reporting something misleading, and
+     * what it eventually reports describes the timeout rather than the fault. It is worse still for
+     * the failures this catches, which are precisely the ones where the two peers disagree about
+     * what they can encode — a client newer than the server, say — because the caller's own logs
+     * then show a network-shaped problem and the reason sits only in the server's log, if anyone
+     * thinks to look. Answering with the throwable puts the reason where the caller can act on it.
+     * <p>
+     * The envelope differs by who is waiting, which is why the replier is supplied per registration
+     * (see registerJavaHandler): an entry call is answered to the remote client, which expects a
+     * BusCallResult, while a locally-relayed endpoint call is answered to listenBusEntryCalls(),
+     * which wraps whatever it receives. Getting this wrong is not a nuisance — a reply the caller
+     * can't recognise is indistinguishable from no reply at all.
+     * <p>
+     * If replying itself fails, there is nowhere left to go: that is the genuinely dead case, and
+     * the only one that still ends in a log line and silence.
+     */
+    private static <T> void replyFailure(Message<T> callerMessage, Throwable throwable, BiConsumer<Message<T>, Throwable> failureReplier) {
+        try {
+            failureReplier.accept(callerMessage, throwable);
+        } catch (Throwable replyThrowable) {
+            Console.error("[BusCallService] Could not even report the failure of the call to '" + callerMessage.address() + "'", replyThrowable);
+        }
+    }
+
+    /**
+     * Failure reply for an entry call, i.e. one received from a remote client: it is waiting for a
+     * BusCallResult, and a failure travels inside one as the target result (the same shape
+     * listenBusEntryCalls() sends when the target address fails to answer it). The call number is
+     * read from the raw payload because the decoded argument may be exactly what we didn't get.
+     */
+    private static <T> void replyEntryCallFailure(Message<T> callerMessage, Throwable throwable) {
+        int callNumber = BusCallArgument.readCallNumberFromRawPayload(callerMessage.body());
+        // This call is over, so it must not keep answering "still pending" to the client's probe. The
+        // usual unregistration is the reply callback in listenBusEntryCalls(), which never runs when the
+        // failure lands before the forwarding does; a no-op when the call never got registered either.
+        PendingServerBusCalls.unregister(ThreadLocalStateHolder.getRunId(), callNumber);
+        sendJavaReply(new BusCallResult<>(callNumber, asFailedAsyncResult(throwable)), new DeliveryOptions(), callerMessage);
+    }
+
+    /**
+     * Failure reply for a locally-relayed endpoint call: the same SerializableAsyncResult a failing
+     * endpoint replies with, so both peers read it through paths they already have — PendingBusCall
+     * unwraps an AsyncResult reply to its cause, and the JS client throws on the error key.
+     */
+    private static <T> void replyLocalCallFailure(Message<T> callerMessage, Throwable throwable) {
+        sendJavaReply(asFailedAsyncResult(throwable), new DeliveryOptions(), callerMessage);
+    }
+
+    /**
+     * The way a throwable travels back to a caller: as a failed SerializableAsyncResult, never as
+     * itself.
+     * <p>
+     * A raw throwable is the intuitive payload and the wrong one, in two ways. It has to be
+     * encodable, and only Exception is — the codec registry is searched up the superclass chain from
+     * ExceptionSerialCodec, so an Error (a StackOverflowError from a recursive codec, say) has no
+     * encoder and the attempt to report the failure throws its own. And where it does encode, it
+     * arrives under the "exception" codec, which the JS client has no decoder for: it passes the
+     * object through untouched, unwrapAsyncResult() sees no error key, and the call it just failed
+     * is delivered as a success carrying a stray object — the same way a failure with no message
+     * used to (36ae35fe).
+     * <p>
+     * SerializableAsyncResult has neither problem. Its codec writes the message as a plain string,
+     * so any throwable survives it, and both peers already treat that envelope as a failure.
+     */
+    private static Object asFailedAsyncResult(Throwable throwable) {
+        return SerializableAsyncResult.getSerializableAsyncResult(Future.failedFuture(throwable));
     }
 
     /**
@@ -207,7 +292,10 @@ public final class BusCallService {
      * @param <J> expected java class as input for the java handler
      */
     private static <J, T> Registration registerJavaHandler(boolean local, String address, BiConsumer<J, Message<T>> javaReplyHandler) {
-        return registerJsonMessageHandler(local, address, javaHandlerToJsonMessageHandler(javaReplyHandler));
+        // `local` also decides who is waiting on the other end, and therefore which envelope an
+        // unanswerable call must be failed with — see replyFailure().
+        return registerJsonMessageHandler(local, address, javaHandlerToJsonMessageHandler(javaReplyHandler,
+            local ? BusCallService::replyLocalCallFailure : BusCallService::replyEntryCallFailure));
     }
 
     private static <J, T> Registration registerJavaHandlerForLocalCalls(String address, BiConsumer<J, Message<T>> javaReplyHandler) {
@@ -252,13 +340,24 @@ public final class BusCallService {
                         // thought to look.
                         if (javaAsyncResult != null && javaAsyncResult.failed())
                             Console.error("[BusCallService] Endpoint '" + address + "' failed", javaAsyncResult.cause());
-                        // Replying to the caller by sending this java async result to it
-                        sendJavaReply(
-                            // And making sure that it is serializable using SerializableAsyncResult (but assuming that javaAsyncResult.result() is serializable)
-                            SerializableAsyncResult.getSerializableAsyncResult(javaAsyncResult),
-                            new DeliveryOptions(),
-                            callerMessage
-                        );
+                        try {
+                            // Replying to the caller by sending this java async result to it
+                            sendJavaReply(
+                                // And making sure that it is serializable using SerializableAsyncResult (but assuming that javaAsyncResult.result() is serializable)
+                                SerializableAsyncResult.getSerializableAsyncResult(javaAsyncResult),
+                                new DeliveryOptions(),
+                                callerMessage
+                            );
+                        } catch (Throwable throwable) {
+                            // That assumption about the result being serializable is the one that breaks here:
+                            // encodeToJson() throws "No SerialCodec for type" when the endpoint returns something
+                            // the registry doesn't know. This callback usually runs after the enclosing handler has
+                            // returned, so the catch in javaHandlerToJsonMessageHandler doesn't cover it and the
+                            // throwable would otherwise leave through the event loop, taking the reply with it.
+                            // Reply with the failure instead: the caller loses the result either way, but learns why.
+                            Console.error("[BusCallService] Endpoint '" + address + "' could not serialize its reply", throwable);
+                            replyFailure(callerMessage, throwable, BusCallService::replyLocalCallFailure);
+                        }
                     });
                 }
             ));
