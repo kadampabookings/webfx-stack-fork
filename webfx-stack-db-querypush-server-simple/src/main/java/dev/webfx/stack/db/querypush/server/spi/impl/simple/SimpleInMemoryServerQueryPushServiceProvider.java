@@ -97,7 +97,13 @@ public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQu
 
     @Override
     protected StreamInfo getStreamInfo(Object queryStreamId) {
-        return streamInfos.get(queryStreamId);
+        // Null-tolerant on purpose: StreamInfo's constructor calls this with the OPTIONAL parent
+        // stream id, which is null for every ordinary subscription (only child streams have one).
+        // HashMap.get(null) answered null; ConcurrentHashMap.get(null) throws NPE — and that NPE
+        // escaped executeQueryPush synchronously, where the bus-call layer logs a throwing endpoint
+        // without replying. Every subscribe then hung with no error and no stream was ever
+        // registered: push-mode pages spun on their spinner and /monitor showed 0 push queries.
+        return queryStreamId == null ? null : streamInfos.get(queryStreamId);
     }
 
     @Override
