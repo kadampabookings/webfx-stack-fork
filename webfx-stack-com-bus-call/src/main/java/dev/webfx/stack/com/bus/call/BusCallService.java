@@ -240,7 +240,7 @@ public final class BusCallService {
         return BusCallService.<A, R>registerJavaHandlerForLocalCalls(address, (javaArgument, callerMessage) ->
             ThreadLocalStateHolder.runWithState(callerMessage.state(), () -> {
                     // Calling the java function each time a java object is received
-                    javaAsyncFunction.apply(javaArgument).onComplete(javaAsyncResult -> { // the java result of the asynchronous function is now ready
+                    applyEndpoint(address, javaAsyncFunction, javaArgument).onComplete(javaAsyncResult -> { // the java result of the asynchronous function is now ready
                         // A failed endpoint is logged HERE, where the throwable is still intact. Only its
                         // message survives serialisation (see SerializableAsyncResult's codec) — the type,
                         // the stack trace and any cause chain are dropped, and the caller receives a bare
@@ -265,6 +265,52 @@ public final class BusCallService {
     }
 
     /**
+     * Invokes an asynchronous endpoint, turning the two ways it can misbehave — throwing instead of
+     * returning, and returning null instead of a Future — into an ordinary failed future.
+     * <p>
+     * Both are otherwise fatal to the reply, not just to the call. The reply is sent from
+     * onComplete(), so nothing reaches it, and the only catch upstream is the generic one in
+     * javaHandlerToJsonMessageHandler, which logs the throwable and returns without answering. The
+     * caller is then left holding a call that returns neither a result nor an error: it waits out
+     * its own timeout with nothing to report, and any UI waiting on it simply never moves.
+     * <p>
+     * That is much harder to place than a failure. An endpoint that fails says which endpoint and
+     * why; an endpoint that goes silent looks like a slow network, a lost subscription, or a client
+     * bug, and it looks that way to every caller at once. A query-push subscribe was throwing NPE
+     * on entry for two days and presented as pages stuck on their spinners with an empty push-query
+     * list on /monitor — "nothing is subscribed" rather than "every subscribe is dying". Making the
+     * throw a failed future puts it back on the wire, and past the log line below, with its stack
+     * trace still intact.
+     * <p>
+     * A null future is treated the same way. No endpoint should return one, but the alternative is
+     * an NPE here, which lands in the very same silence this method exists to remove.
+     */
+    private static <A, R> Future<R> applyEndpoint(String address, AsyncFunction<A, R> javaAsyncFunction, A javaArgument) {
+        try {
+            Future<R> resultFuture = javaAsyncFunction.apply(javaArgument);
+            return resultFuture != null ? resultFuture
+                : Future.failedFuture(new IllegalStateException("Endpoint '" + address + "' returned no future"));
+        } catch (Throwable throwable) {
+            return Future.failedFuture(throwable);
+        }
+    }
+
+    /**
+     * The synchronous counterpart of {@link #applyEndpoint}: the reply to send when a synchronous
+     * endpoint throws, in place of the result it didn't return.
+     * <p>
+     * Failures travel as a SerializableAsyncResult, the same envelope the asynchronous endpoint
+     * above replies with, even though these endpoints reply with a bare value when they succeed.
+     * Both receivers already read it: PendingBusCall unwraps an AsyncResult reply to its cause, and
+     * the JS client throws on the error key. So the two shapes coexist on this address without
+     * either side needing to change.
+     */
+    private static Object endpointFailureReply(String address, Throwable throwable) {
+        Console.error("[BusCallService] Endpoint '" + address + "' threw", throwable);
+        return SerializableAsyncResult.getSerializableAsyncResult(Future.failedFuture(throwable));
+    }
+
+    /**
      * Method to register a Java synchronous function as a java service, so it can be called through the BusCallService.
      *
      * @param <A> java class of the input argument of the synchronous function
@@ -272,7 +318,19 @@ public final class BusCallService {
      */
     public static <A, R> Registration registerBusCallEndpoint(String address, Function<A, R> javaFunction) {
         return BusCallService.<A, R>registerJavaHandlerForLocalCalls(address,
-            (javaArgument, callerMessage) -> sendJavaReply(javaFunction.apply(javaArgument), callerMessage.options(), callerMessage)
+            (javaArgument, callerMessage) -> {
+                // A throw here would otherwise leave the caller with no reply at all — see applyEndpoint().
+                // It costs more than a failed call on this overload: these are also the client-side push
+                // endpoints (PushClientService.registerPushFunction), and a push the server never gets an
+                // answer to marks the client unresponsive, which drops every query-push stream it holds.
+                Object javaReply;
+                try {
+                    javaReply = javaFunction.apply(javaArgument);
+                } catch (Throwable throwable) {
+                    javaReply = endpointFailureReply(address, throwable);
+                }
+                sendJavaReply(javaReply, callerMessage.options(), callerMessage);
+            }
         );
     }
 
@@ -284,7 +342,15 @@ public final class BusCallService {
      */
     public static <R> Registration registerBusCallEndpoint(String address, Callable<R> callable) {
         return BusCallService.<Object, R>registerJavaHandlerForLocalCalls(address,
-            (ignoredJavaArgument, callerMessage) -> sendJavaReply(callable.call(), null, callerMessage)
+            (ignoredJavaArgument, callerMessage) -> {
+                Object javaReply; // same reasoning as the Function overload above
+                try {
+                    javaReply = callable.call();
+                } catch (Throwable throwable) {
+                    javaReply = endpointFailureReply(address, throwable);
+                }
+                sendJavaReply(javaReply, null, callerMessage);
+            }
         );
     }
 
