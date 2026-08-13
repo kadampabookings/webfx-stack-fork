@@ -326,10 +326,51 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         SubmitArgument[] arr = batch.getArray();
         int priority = arr.length > 0 ? arr[0].getPriority() : SubmitArgument.STANDARD_PRIORITY;
         Boolean backoffice = callerBackoffice(ThreadLocalStateHolder.getRunId());
-        return asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice));
+        // Read here, NOT inside executeSubmitBatchNow: the async queue may run that later and on
+        // another thread, where the thread-local state is gone. Same reason backoffice is captured
+        // on this line rather than at execution time.
+        String auditNote = callerAuditNote();
+        return asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote));
     }
 
-    private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch, Boolean backoffice) {
+    /**
+     * Who is making this change, for the database audit triggers to record.
+     *
+     * The person/account audit tables (person_account_move, person_link_change) read
+     * `current_setting('kbs.audit_note', true)`, which until now only maintenance scripts ever
+     * set — so every change made through the app was attributed to the database ROLE, and a
+     * trail meant to answer "who did this" could only answer "the server did". Stamping the
+     * authenticated principal onto the transaction closes that.
+     *
+     * Returns null when nobody is authenticated (guests, server jobs), which leaves the note
+     * unset exactly as before rather than inventing an actor.
+     */
+    private static String callerAuditNote() {
+        Object userId = ThreadLocalStateHolder.getUserId();
+        if (userId == null)
+            return null;
+        // The principal defines its own short form (Modality's prints person=..,account=..), which
+        // keeps this layer free of any knowledge of what a user IS. A principal that forgets to
+        // override toString() would write Object@1a2b3c into the trail — which is exactly what
+        // ModalityUserPrincipal.toString() exists to prevent.
+        return "user:" + userId;
+    }
+
+    /**
+     * Applies the audit note to THIS transaction, before any of the batch runs.
+     *
+     * `set_config(..., true)` is the function form of SET LOCAL: transaction-scoped, so it cannot
+     * leak onto the next borrower of a pooled connection. Parameterised rather than interpolated,
+     * so a principal can never be read as SQL.
+     */
+    private static io.vertx.core.Future<?> applyAuditNote(SqlConnection connection, String auditNote) {
+        if (auditNote == null)
+            return io.vertx.core.Future.succeededFuture();
+        return connection.preparedQuery("select set_config('kbs.audit_note', $1, true)")
+            .execute(Tuple.of(auditNote));
+    }
+
+    private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch, Boolean backoffice, String auditNote) {
         // This batch may use GeneratedKeyReference instances in its parameters, which we will need to resolve during
         // the execution. To do so, we create batchIndexGeneratedKeys, which is a list of generated keys for each
         // SubmitArgument in the batch (index 0 will contain the possible generated keys from the execution of the first
@@ -339,6 +380,10 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         long t0n = System.nanoTime();
         // We embed the batch execution inside a transaction using Vert.x API (and convert the return Vert.x Future<SubmitResult> into WebFX Future<SubmitResult>)
         return toWebfxFuture(withTransaction(pool, connection ->
+            // Stamp the actor onto the transaction first, so every audit trigger the batch fires
+            // records who did it. One extra round-trip per submit batch, and only when someone is
+            // authenticated — submits are far rarer than queries.
+            applyAuditNote(connection, auditNote).compose(ignored ->
             // We execute the batch in a serial order (we need a couple of Vert.x <-> WebFX Future for that)
             toVertxFuture(batch.executeSerial(SubmitResult[]::new, arg -> toWebfxFuture(
                 // We execute this individual submission, passing batchIndexGeneratedKeys (for GeneratedKeyReference resolution)
@@ -348,7 +393,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                         batchIndexGeneratedKeys.add(submitResult.getGeneratedKeys());
                         return submitResult;
                     })
-            )))
+            ))))
         )).onSuccess(x -> { // Just for time report
             if (LOG_TIMINGS) {
                 long executionTimeMillis = System.currentTimeMillis() - t0;
