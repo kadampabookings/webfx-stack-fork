@@ -19,6 +19,7 @@ import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.db.submit.SubmitResult;
 import dev.webfx.stack.db.submit.listener.SubmitListenerService;
 import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
+import dev.webfx.stack.session.state.AuditActorRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import io.vertx.core.net.ClientSSLOptions;
 import io.vertx.pgclient.PgBuilder;
@@ -330,7 +331,8 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // another thread, where the thread-local state is gone. Same reason backoffice is captured
         // on this line rather than at execution time.
         String auditNote = callerAuditNote();
-        return asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote));
+        Object auditActorId = AuditActorRegistry.currentActorId();
+        return asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote, auditActorId));
     }
 
     /**
@@ -363,14 +365,18 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
      * leak onto the next borrower of a pooled connection. Parameterised rather than interpolated,
      * so a principal can never be read as SQL.
      */
-    private static io.vertx.core.Future<?> applyAuditNote(SqlConnection connection, String auditNote) {
-        if (auditNote == null)
+    private static io.vertx.core.Future<?> applyAuditNote(SqlConnection connection, String auditNote, Object auditActorId) {
+        if (auditNote == null && auditActorId == null)
             return io.vertx.core.Future.succeededFuture();
-        return connection.preparedQuery("select set_config('kbs.audit_note', $1, true)")
-            .execute(Tuple.of(auditNote));
+        // Both settings in one statement, so identifying the actor costs one round-trip, not two.
+        // The id is what the audit tables store in changed_by_person_id; the note stays as the
+        // frozen text beside it, the way History keeps username next to userPerson.
+        return connection.preparedQuery(
+                "select set_config('kbs.audit_note', $1, true), set_config('kbs.audit_person_id', $2, true)")
+            .execute(Tuple.of(auditNote, auditActorId == null ? null : String.valueOf(auditActorId)));
     }
 
-    private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch, Boolean backoffice, String auditNote) {
+    private Future<Batch<SubmitResult>> executeSubmitBatchNow(Batch<SubmitArgument> batch, Boolean backoffice, String auditNote, Object auditActorId) {
         // This batch may use GeneratedKeyReference instances in its parameters, which we will need to resolve during
         // the execution. To do so, we create batchIndexGeneratedKeys, which is a list of generated keys for each
         // SubmitArgument in the batch (index 0 will contain the possible generated keys from the execution of the first
@@ -383,7 +389,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             // Stamp the actor onto the transaction first, so every audit trigger the batch fires
             // records who did it. One extra round-trip per submit batch, and only when someone is
             // authenticated — submits are far rarer than queries.
-            applyAuditNote(connection, auditNote).compose(ignored ->
+            applyAuditNote(connection, auditNote, auditActorId).compose(ignored ->
             // We execute the batch in a serial order (we need a couple of Vert.x <-> WebFX Future for that)
             toVertxFuture(batch.executeSerial(SubmitResult[]::new, arg -> toWebfxFuture(
                 // We execute this individual submission, passing batchIndexGeneratedKeys (for GeneratedKeyReference resolution)
