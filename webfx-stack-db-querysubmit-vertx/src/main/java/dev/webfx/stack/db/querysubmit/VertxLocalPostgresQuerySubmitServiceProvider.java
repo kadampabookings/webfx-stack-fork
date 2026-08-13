@@ -384,6 +384,12 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         List<Object[]> batchIndexGeneratedKeys = new ArrayList<>(batch.getArray().length);
         long t0 = System.currentTimeMillis();
         long t0n = System.nanoTime();
+        // The statement that actually failed, so the /monitor "Errors" drill-down shows the offending
+        // DML instead of the batch's first statement (the transaction opener, e.g.
+        // "select set_transaction_parameters(...)"). executeSerial runs the batch one statement at a
+        // time and stops at the first failure, so this is set exactly once, on the culprit. Single
+        // element holder because it's assigned from the serial-execution lambda below.
+        final String[] failingStatement = { null };
         // We embed the batch execution inside a transaction using Vert.x API (and convert the return Vert.x Future<SubmitResult> into WebFX Future<SubmitResult>)
         return toWebfxFuture(withTransaction(pool, connection ->
             // Stamp the actor onto the transaction first, so every audit trigger the batch fires
@@ -394,6 +400,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
             toVertxFuture(batch.executeSerial(SubmitResult[]::new, arg -> toWebfxFuture(
                 // We execute this individual submission, passing batchIndexGeneratedKeys (for GeneratedKeyReference resolution)
                 executeIndividualSubmitWithConnection(arg, connection, batchIndexGeneratedKeys, backoffice)
+                    // Remember the first statement that fails — the one that actually raised the error —
+                    // so recordCompletion records it rather than the batch's transaction opener.
+                    .onFailure(e -> { if (failingStatement[0] == null) failingStatement[0] = arg.getStatement(); })
                     .map(submitResult -> { // Identity mapping, just for batchIndexGeneratedKeys management
                         // We collect the possible generated keys (if the last submission was "insert ... returning id")
                         batchIndexGeneratedKeys.add(submitResult.getGeneratedKeys());
@@ -406,7 +415,8 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
                 log((executionTimeMillis < SQL_OPERATION_WARNING_MILLIS ? "" : "⚠️ WARNING: ") + "Submit batch executed in " + executionTimeMillis + "ms");
             }
             onSuccessfulSubmitBatch(batch);
-        }).onComplete(ar -> recordCompletion(t0n, ar, firstStatementOf(batch.getArray()), backoffice));
+        }).onComplete(ar -> recordCompletion(t0n, ar,
+            failingStatement[0] != null ? failingStatement[0] : firstStatementOf(batch.getArray()), backoffice));
     }
 
     private static void onSuccessfulSubmitBatch(Batch<SubmitArgument> batch) {
