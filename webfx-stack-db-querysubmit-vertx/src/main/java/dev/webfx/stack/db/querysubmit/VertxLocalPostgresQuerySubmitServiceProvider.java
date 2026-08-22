@@ -20,6 +20,7 @@ import dev.webfx.stack.db.submit.SubmitResult;
 import dev.webfx.stack.db.submit.listener.SubmitListenerService;
 import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
 import dev.webfx.stack.session.state.AuditActorRegistry;
+import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import io.vertx.core.net.ClientSSLOptions;
 import io.vertx.pgclient.PgBuilder;
@@ -305,12 +306,34 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         }
     }
 
+    /**
+     * Refuses the write when the caller's session is only allowed to read.
+     *
+     * <p>Checked here, at the last point before SQL, because this is the only place every write
+     * converges: client DML, the document service, a credential change. Anywhere higher and the
+     * check would have to be repeated per feature, and the one that got missed would be the hole.
+     *
+     * <p>Read on the calling thread, never inside the async queue — the queue may run the operation
+     * later and on another thread, where the thread-local state is gone. Same reason {@code
+     * backoffice} and the audit note are captured where they are.
+     *
+     * <p>The message carries a stable marker the client can recognise without this layer knowing
+     * anything about what kind of session is restricted or why.
+     */
+    private static Future<Void> checkWriteAllowed() {
+        if (RestrictedPrincipalRegistry.isCurrentRestricted())
+            return Future.failedFuture("[ReadOnlySessionError] This session is not allowed to modify data");
+        return Future.succeededFuture();
+    }
+
+
     @Override
     public Future<SubmitResult> executeSubmit(SubmitArgument argument) {
         // Submits get priority but no source-based coalescing (sourceId=null): cancelling a pending
         // submit because a newer same-source one arrived would drop side-effecting work.
         Boolean backoffice = callerBackoffice(ThreadLocalStateHolder.getRunId());
-        return asyncQueue.addAsyncOperation(argument, argument.getPriority(), null, arg -> executeSubmitNow(arg, backoffice));
+        return checkWriteAllowed().compose(ignored ->
+            asyncQueue.addAsyncOperation(argument, argument.getPriority(), null, arg -> executeSubmitNow(arg, backoffice)));
     }
 
     private Future<SubmitResult> executeSubmitNow(SubmitArgument argument, Boolean backoffice) {
@@ -332,7 +355,8 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // on this line rather than at execution time.
         String auditNote = callerAuditNote();
         Object auditActorId = AuditActorRegistry.currentActorId();
-        return asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote, auditActorId));
+        return checkWriteAllowed().compose(ignored ->
+            asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote, auditActorId)));
     }
 
     /**
