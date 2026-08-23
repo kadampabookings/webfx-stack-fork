@@ -41,7 +41,6 @@ import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -112,9 +111,6 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     /** Returns a snapshot of all registered QueryInfos (one per distinct QueryArgument) for monitoring. */
     protected abstract Collection<QueryInfo> getQueryInfos();
 
-    /** Bounds the parameters display string shipped in the monitor snapshot. */
-    private static final int MONITOR_PARAMETERS_MAX_LENGTH = 200;
-
     @Override
     public QueryPushMonitorInfo getMonitorInfo() {
         // This snapshot exposes the push query statements, so it's reserved for logged-in callers
@@ -149,10 +145,12 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                             sawFrontoffice = true;
                     }
                 }
+                // Only the count, never the values: this payload goes to any caller who passes the
+                // logged-in check, and the bind values of a live subscription are another user's
+                // personal data. Concurrent subscriptions stay distinguishable by their stream ids.
+                // Sent as a bare number so the client can render it in the reader's own language.
                 Object[] parameters = queryInfo.queryArgument.getParameters();
-                String parametersDisplay = parameters == null || parameters.length == 0 ? null : Arrays.toString(parameters);
-                if (parametersDisplay != null && parametersDisplay.length() > MONITOR_PARAMETERS_MAX_LENGTH)
-                    parametersDisplay = parametersDisplay.substring(0, MONITOR_PARAMETERS_MAX_LENGTH) + "…";
+                String parametersDisplay = parameters == null || parameters.length == 0 ? null : String.valueOf(parameters.length);
                 queryStreams.add(new QueryStreamMonitorInfo(
                     queryStreamIds,
                     queryInfo.queryArgument.getStatement(),

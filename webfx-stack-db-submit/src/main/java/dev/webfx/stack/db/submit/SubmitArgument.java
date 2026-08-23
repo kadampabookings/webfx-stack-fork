@@ -1,6 +1,5 @@
 package dev.webfx.stack.db.submit;
 
-import dev.webfx.platform.util.Arrays;
 import dev.webfx.stack.db.datascope.DataScope;
 
 /**
@@ -76,7 +75,9 @@ public final class SubmitArgument {
 
     @Override
     public String toString() {
-        return "SubmitArgument('" + statement + (parameters == null ? "'" : "', " + Arrays.toString(parameters)) + ')';
+        // Bind values are deliberately NOT rendered: they are the caller's actual data, and this
+        // string is logged on every submit. The count is kept because it is what diagnostics need.
+        return "SubmitArgument('" + statement + (parameters == null ? "'" : "', " + parameters.length + " value(s)") + ')';
     }
 
     public static SubmitArgumentBuilder builder() {

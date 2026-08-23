@@ -179,11 +179,14 @@ public final class QueryArgument {
 
     @Override
     public String toString() {
+        // Bind values are deliberately NOT rendered: they are the caller's actual data (emails,
+        // names, health free text), and this string is logged on every query and shipped to the
+        // monitoring endpoints. The count is kept because it is what diagnostics actually need.
         return "QueryArgument{" +
                "dataSourceId=" + dataSourceId +
                ", language='" + language + '\'' +
                ", statement='" + statement + '\'' +
-               ", parameters=" + Arrays.toString(parameters) +
+               ", parameters=" + (parameters == null ? "null" : parameters.length + " value(s)") +
                ", parameterNames=" + Arrays.toString(parameterNames) +
                '}';
     }
