@@ -1,4 +1,4 @@
-package dev.webfx.stack.authz.client.spi.impl.inmemory;
+package dev.webfx.stack.authz.core;
 
 /**
  * @author Bruno Salmon

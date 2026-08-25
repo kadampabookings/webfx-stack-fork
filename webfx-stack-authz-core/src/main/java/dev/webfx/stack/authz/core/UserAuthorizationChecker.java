@@ -1,4 +1,4 @@
-package dev.webfx.stack.authz.client.spi.impl;
+package dev.webfx.stack.authz.core;
 
 import dev.webfx.platform.async.Future;
 

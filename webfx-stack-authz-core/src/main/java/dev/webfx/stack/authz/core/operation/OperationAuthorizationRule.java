@@ -1,8 +1,8 @@
-package dev.webfx.stack.authz.client.operation;
+package dev.webfx.stack.authz.core.operation;
 
 import dev.webfx.extras.operation.HasOperationCode;
-import dev.webfx.stack.authz.client.spi.impl.inmemory.AuthorizationRuleType;
-import dev.webfx.stack.authz.client.spi.impl.inmemory.SimpleInMemoryAuthorizationRuleBase;
+import dev.webfx.stack.authz.core.AuthorizationRuleType;
+import dev.webfx.stack.authz.core.SimpleInMemoryAuthorizationRuleBase;
 
 /**
  * @author Bruno Salmon

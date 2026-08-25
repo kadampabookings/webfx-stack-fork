@@ -77,6 +77,7 @@
         <module>webfx-stack-authn-server-gateway-mojoauth-plugin</module>
         <module>webfx-stack-authn-server-portal</module>
         <module>webfx-stack-authz-client</module>
+        <module>webfx-stack-authz-core</module>
         <module>webfx-stack-authz-server</module>
         <module>webfx-stack-cloud-deepl-client</module>
         <module>webfx-stack-cloud-deepl-server-plugin</module>

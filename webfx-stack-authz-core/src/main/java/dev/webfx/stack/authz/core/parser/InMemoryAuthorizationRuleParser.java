@@ -1,6 +1,6 @@
-package dev.webfx.stack.authz.client.spi.impl.inmemory.parser;
+package dev.webfx.stack.authz.core.parser;
 
-import dev.webfx.stack.authz.client.spi.impl.inmemory.InMemoryAuthorizationRule;
+import dev.webfx.stack.authz.core.InMemoryAuthorizationRule;
 
 /**
  * @author Bruno Salmon

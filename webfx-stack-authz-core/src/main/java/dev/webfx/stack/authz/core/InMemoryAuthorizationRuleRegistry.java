@@ -1,9 +1,8 @@
-package dev.webfx.stack.authz.client.spi.impl.inmemory;
+package dev.webfx.stack.authz.core;
 
 import dev.webfx.platform.util.Arrays;
-import dev.webfx.stack.authz.client.context.AuthorizationContext;
-import dev.webfx.stack.authz.client.spi.impl.inmemory.parser.InMemoryAuthorizationRuleParser;
-import dev.webfx.stack.authz.client.spi.impl.inmemory.parser.InMemoryAuthorizationRuleParserRegistry;
+import dev.webfx.stack.authz.core.parser.InMemoryAuthorizationRuleParser;
+import dev.webfx.stack.authz.core.parser.InMemoryAuthorizationRuleParserRegistry;
 
 import java.util.*;
 
@@ -77,15 +76,28 @@ public final class InMemoryAuthorizationRuleRegistry {
             registerAuthorizationRule(inMemoryAuthorizationRuleParser.parseAuthorization(authorization));
     }
 
-    public boolean doesRulesAuthorize(Object operationRequest) {
-        return computeRuleResult(operationRequest) == AuthorizationRuleResult.GRANTED;
+    public boolean doesRulesAuthorize(Object operationRequest, Map<String, String> callerContext) {
+        return computeRuleResult(operationRequest, callerContext) == AuthorizationRuleResult.GRANTED;
     }
 
-    public AuthorizationRuleResult computeRuleResult(Object operationRequest) {
+    /**
+     * Evaluate the rules against a request, in the caller's context.
+     *
+     * <p>The context is a parameter rather than ambient state, and that is the change that let this
+     * class leave the client. It used to read a static observable map describing what the UI was
+     * looking at — one context per process, which is exactly right for one user driving one screen and
+     * meaningless on a server handling many callers at once. Passing it in costs the client one
+     * snapshot and lets the server answer per request.
+     *
+     * @param callerContext the context to judge rules against — for a UI, what it is showing; for a
+     *                      server, what the request resolved to. Never null; pass an empty map when
+     *                      there is no context, which matches only rules that declare none.
+     */
+    public AuthorizationRuleResult computeRuleResult(Object operationRequest, Map<String, String> callerContext) {
         AuthorizationRuleResult[] result ={ AuthorizationRuleResult.OUT_OF_RULE_CONTEXT };
         synchronized (registeredInMemoryAuthorizationRules) {
             registeredInMemoryAuthorizationRules.forEach((context, operationRequestsRules) -> {
-                if (!isContextApplicable(context))
+                if (!isContextApplicable(context, callerContext))
                     return;
                 Class<?> operationRequestClass = operationRequest.getClass();
                 while (true) {
@@ -110,13 +122,13 @@ public final class InMemoryAuthorizationRuleRegistry {
         return result[0];
     }
 
-    private boolean isContextApplicable(Map<String, String> context) {
-        if (context != ANY_CONTEXT) {
-            for (Map.Entry<String, String> contextProperty : context.entrySet()) {
+    private boolean isContextApplicable(Map<String, String> ruleContext, Map<String, String> callerContext) {
+        if (ruleContext != ANY_CONTEXT) {
+            for (Map.Entry<String, String> contextProperty : ruleContext.entrySet()) {
                 String value = contextProperty.getValue();
                 if (!"any".equals(value)) {
                     String key = contextProperty.getKey();
-                    if (!Objects.equals(value, AuthorizationContext.getContextProperties().get(key)))
+                    if (!Objects.equals(value, callerContext == null ? null : callerContext.get(key)))
                         return false;
                 }
             }
