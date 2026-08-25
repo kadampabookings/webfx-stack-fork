@@ -15,6 +15,7 @@ public final class SubmitArgumentBuilder {
     private String statement;
     private Object[] parameters;
     private int priority = SubmitArgument.STANDARD_PRIORITY;
+    private boolean transactionPreamble;
 
     public SubmitArgumentBuilder setOriginalArgument(SubmitArgument originalArgument) {
         this.originalArgument = originalArgument;
@@ -55,6 +56,13 @@ public final class SubmitArgumentBuilder {
         return this;
     }
 
+    /** Marks this entry as a request for the application's transaction preamble — see
+     * {@link SubmitArgument#isTransactionPreamble()}. Statement and parameters are then ignored. */
+    public SubmitArgumentBuilder setTransactionPreamble(boolean transactionPreamble) {
+        this.transactionPreamble = transactionPreamble;
+        return this;
+    }
+
     public SubmitArgumentBuilder setPriority(int priority) {
         this.priority = priority;
         return this;
@@ -68,10 +76,11 @@ public final class SubmitArgumentBuilder {
                 .setLanguage(argument.getLanguage())
                 .setStatement(argument.getStatement())
                 .setParameters(argument.getParameters())
-                .setPriority(argument.getPriority());
+                .setPriority(argument.getPriority())
+                .setTransactionPreamble(argument.isTransactionPreamble());
     }
 
     public SubmitArgument build() {
-        return new SubmitArgument(originalArgument, dataSourceId, dataScope, returnGeneratedKeys, language, statement, parameters, priority);
+        return new SubmitArgument(originalArgument, dataSourceId, dataScope, returnGeneratedKeys, language, statement, parameters, priority, transactionPreamble);
     }
 }

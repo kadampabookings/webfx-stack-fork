@@ -16,6 +16,7 @@ public final class SubmitArgumentSerialCodec extends SerialCodecBase<SubmitArgum
     private static final String STATEMENT_KEY = "statement";
     private static final String PARAMETERS_KEY = "parameters";
     private static final String PRIORITY_KEY = "priority";
+    private static final String TRANSACTION_PREAMBLE_KEY = "preamble";
 
     public SubmitArgumentSerialCodec() {
         super(SubmitArgument.class, CODEC_ID);
@@ -31,6 +32,10 @@ public final class SubmitArgumentSerialCodec extends SerialCodecBase<SubmitArgum
         if (!Arrays.isEmpty(arg.getParameters()))
             encodeObjectArray(serial, PARAMETERS_KEY,           arg.getParameters());
         encodeInteger(serial, PRIORITY_KEY, arg.getPriority(), SubmitArgument.STANDARD_PRIORITY);
+        // Written only when set, so an ordinary statement's serial form is byte-for-byte what it was
+        // before this field existed, and an older peer's message simply decodes to false.
+        if (arg.isTransactionPreamble())
+            encodeBoolean(serial, TRANSACTION_PREAMBLE_KEY, true);
     }
 
     @Override
@@ -43,7 +48,8 @@ public final class SubmitArgumentSerialCodec extends SerialCodecBase<SubmitArgum
                 decodeString(     serial, LANGUAGE_KEY),
                 decodeString(     serial, STATEMENT_KEY),
                 decodeObjectArray(serial, PARAMETERS_KEY),
-                priority == null ? SubmitArgument.STANDARD_PRIORITY : priority
+                priority == null ? SubmitArgument.STANDARD_PRIORITY : priority,
+                Boolean.TRUE.equals(decodeBoolean(serial, TRANSACTION_PREAMBLE_KEY, false))
         );
     }
 }

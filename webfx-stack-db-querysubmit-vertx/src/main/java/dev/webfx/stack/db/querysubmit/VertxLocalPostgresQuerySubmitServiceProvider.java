@@ -22,6 +22,7 @@ import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
 import dev.webfx.stack.session.state.AuditActorRegistry;
 import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
+import dev.webfx.stack.session.state.TransactionPreambleRegistry;
 import io.vertx.core.net.ClientSSLOptions;
 import io.vertx.pgclient.PgBuilder;
 import io.vertx.pgclient.PgConnectOptions;
@@ -332,6 +333,12 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // Submits get priority but no source-based coalescing (sourceId=null): cancelling a pending
         // submit because a newer same-source one arrived would drop side-effecting work.
         Boolean backoffice = callerBackoffice(ThreadLocalStateHolder.getRunId());
+        // A preamble on its own opens a transaction that then does nothing, and a lone submit is its own
+        // transaction, so it cannot be the preamble for anything else. Asking for one here means the
+        // caller believes it is inside a batch when it is not — refuse rather than run the write without
+        // the preamble it thinks it has.
+        if (argument.isTransactionPreamble())
+            return Future.failedFuture("[TransactionPreambleError] A transaction preamble is only meaningful inside a submit batch");
         return checkWriteAllowed().compose(ignored ->
             asyncQueue.addAsyncOperation(argument, argument.getPriority(), null, arg -> executeSubmitNow(arg, backoffice)));
     }
@@ -355,8 +362,53 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         // on this line rather than at execution time.
         String auditNote = callerAuditNote();
         Object auditActorId = AuditActorRegistry.currentActorId();
+        Batch<SubmitArgument> resolvedBatch;
+        try {
+            resolvedBatch = resolveTransactionPreamble(batch);
+        } catch (IllegalStateException e) {
+            return Future.failedFuture(e.getMessage());
+        }
         return checkWriteAllowed().compose(ignored ->
-            asyncQueue.addAsyncOperation(batch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote, auditActorId)));
+            asyncQueue.addAsyncOperation(resolvedBatch, priority, null, b -> executeSubmitBatchNow(b, backoffice, auditNote, auditActorId)));
+    }
+
+    /**
+     * Replaces every transaction-preamble request in the batch with the SQL the application registered.
+     *
+     * <p>A client sets {@link SubmitArgument#isTransactionPreamble()} on an entry to say its
+     * transaction needs a preamble; what that preamble SAYS is decided here, from
+     * {@link TransactionPreambleRegistry}, never from anything the client sent. The statement the client
+     * put in the entry is discarded — that is the whole point, since sending it was how a caller used to
+     * choose the privileges its own transaction ran with.
+     *
+     * <p>Resolved on the calling thread, with the caller's state still in place, for the same reason
+     * {@code backoffice} and the audit note are captured where they are.
+     *
+     * <p>Refuses rather than drops when nothing is registered. Dropping would run the write with no
+     * preamble at all, which either fails deep in a trigger with a message about a missing setting, or —
+     * worse — succeeds under whatever the triggers assume when nobody said. Neither is something to
+     * discover in production, so a batch that asks for a preamble nobody can supply does not run.
+     */
+    private static Batch<SubmitArgument> resolveTransactionPreamble(Batch<SubmitArgument> batch) {
+        SubmitArgument[] arr = batch.getArray();
+        SubmitArgument[] resolved = null; // stays null (and the batch untouched) when no entry asks
+        for (int i = 0; i < arr.length; i++) {
+            SubmitArgument argument = arr[i];
+            if (argument == null || !argument.isTransactionPreamble())
+                continue;
+            String preambleSql = TransactionPreambleRegistry.currentPreambleStatement();
+            if (preambleSql == null)
+                throw new IllegalStateException("[TransactionPreambleError] This submit asks for a transaction preamble, but no application resolver supplied one");
+            if (resolved == null)
+                resolved = arr.clone();
+            resolved[i] = SubmitArgument.builder().copy(argument)
+                    .setTransactionPreamble(false) // resolved now — downstream sees an ordinary statement
+                    .setLanguage(null)             // plain SQL, so nothing tries to translate it
+                    .setStatement(preambleSql)
+                    .setParameters((Object[]) null) // a request carries no parameters; the resolver's SQL is self-contained
+                    .build();
+        }
+        return resolved == null ? batch : new Batch<>(resolved);
     }
 
     /**
