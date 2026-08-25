@@ -43,11 +43,28 @@ public final class AuditActorRegistry {
      * audit could not name who made it.
      */
     public static Object currentActorId() {
+        return actorId(ThreadLocalStateHolder.getUserId());
+    }
+
+    /**
+     * The actor id for this specific principal, or null when there is nobody, nothing has registered,
+     * or the principal is one the resolver does not recognise.
+     *
+     * <p>Takes the principal explicitly, for callers that captured it earlier and cannot rely on the
+     * thread-local still holding it — the normal situation once a flow has been through an async
+     * round trip, since {@link ThreadLocalStateHolder} is restored when the synchronous portion of
+     * the call returns. The REST image endpoints are the first such caller: they resolve the session
+     * once, up front, and then decide about the caller across several {@code compose()} steps.
+     *
+     * <p>Never throws, for the same reason {@link #currentActorId()} does not: a change must not fail
+     * because the audit could not name who made it. A caller that needs the id for a DECISION rather
+     * than for a record must therefore treat null as "unknown" and refuse, not as "no restriction".
+     *
+     * @param userId the principal to resolve, typically captured at request-creation time
+     */
+    public static Object actorId(Object userId) {
         Function<Object, Object> r = resolver;
-        if (r == null)
-            return null;
-        Object userId = ThreadLocalStateHolder.getUserId();
-        if (userId == null)
+        if (r == null || userId == null)
             return null;
         try {
             return r.apply(userId);

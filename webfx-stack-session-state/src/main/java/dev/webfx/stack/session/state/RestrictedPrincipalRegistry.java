@@ -69,17 +69,16 @@ public final class RestrictedPrincipalRegistry {
     /**
      * Whether a registered user account is behind this specific principal.
      *
-     * <p>Nothing registered, or nobody on the request, answers "no", so a caller that must be a
-     * registered user is refused rather than admitted. That is the conservative direction for this
-     * question, but note it is the same raw value that answers "not restricted" for
-     * {@link #isUserRestricted(Object)}, where the conservative direction is the opposite one. The
-     * two questions share {@code testUserPredicate} and therefore share its defaults; they do not
-     * share what a default costs. See that method for the case where this matters.
+     * <p>Nothing registered, nobody on the request, or a predicate that fails all answer "no", so a
+     * caller that must be a registered user is refused rather than admitted. Note that is the
+     * opposite default to {@link #isUserRestricted(Object)}, where "no" is the permissive answer —
+     * each accessor states its own, which is why {@code testUserPredicate} takes them as parameters.
      *
      * @param userId the principal to judge, typically captured at request-creation time
      */
     public static boolean isUserRegistered(Object userId) {
-        return testUserPredicate(registeredUserPredicate, userId);
+        // Unknown answers "no": a caller gated on being registered is refused, not admitted.
+        return testUserPredicate(registeredUserPredicate, userId, false, false);
     }
 
     /**
@@ -108,7 +107,31 @@ public final class RestrictedPrincipalRegistry {
      * @param userId the principal to judge, typically captured at request-creation time
      */
     public static boolean isUserRestricted(Object userId) {
-        return testUserPredicate(restrictedUserPredicate, userId);
+        // Nothing registered answers "not restricted", preserving the behaviour that existed before
+        // anything registered; a predicate that throws answers "restricted". Callers that cannot
+        // afford the first of those defaults want isUserRestrictedOrUnknown instead.
+        return testUserPredicate(restrictedUserPredicate, userId, false, true);
+    }
+
+    /**
+     * Whether this principal is restricted to reads, <b>or cannot be established as unrestricted</b>.
+     *
+     * <p>Same question as {@link #isUserRestricted(Object)}, opposite default. Nothing registered, no
+     * principal, or a predicate that throws all answer "restricted" here, so a caller can fail closed
+     * on a question it must not get wrong.
+     *
+     * <p>The two exist because the same unknown costs different things in different places. The SQL
+     * submit layer wants the lenient form: it is a global gate on every write in the application, and
+     * an unregistered predicate there must not brick a deployment that never had one. A caller
+     * enforcing read-only OUTSIDE the database wants this one — the REST image endpoints being the
+     * first, because an image goes to the CDN and so never passes the submit layer where that
+     * restriction is otherwise guaranteed. For them an unanswered question is not "no restriction",
+     * it is the only guarantee failing silently.
+     *
+     * @param userId the principal to judge, typically captured at request-creation time
+     */
+    public static boolean isUserRestrictedOrUnknown(Object userId) {
+        return testUserPredicate(restrictedUserPredicate, userId, true, true);
     }
 
     // ---------------------------------------------------------------------------------------------
@@ -142,27 +165,25 @@ public final class RestrictedPrincipalRegistry {
     }
 
     /**
-     * Shared evaluation for both questions: absent predicate or absent principal answers false, and a
-     * predicate that throws answers true.
+     * Shared evaluation, with the answer to each kind of unknown supplied by the caller.
      *
-     * <p><b>Both defaults were chosen for the restricted question and are safe only there.</b> For
-     * "is this user restricted", false-when-unknown preserves the behaviour that existed before
-     * anything registered, and true-when-throwing refuses the write. For "is this user registered"
-     * the throwing case inverts: it reports an unrecognised principal as a registered user, and a
-     * caller gated on {@code isUserRegistered} would be admitted rather than refused.
+     * <p>The defaults are parameters rather than constants because the same unknown means opposite
+     * things to different questions: "no predicate registered" is a refusal for
+     * {@link #isUserRegistered} and a permission for {@link #isUserRestricted}. A single shared
+     * default would silently be wrong for one of them — and wrong in the admitting direction, which
+     * is the way that does not announce itself.
      *
-     * <p>No predicate registered today can throw — both are {@code instanceof} tests — so this is a
-     * trap for the next one rather than a live defect. It wants a per-question default (the value to
-     * answer when the predicate throws, passed in by the caller) before a predicate that can fail is
-     * ever registered.
+     * @param valueWhenUnknown  answer when nothing is registered, or there is no principal
+     * @param valueWhenThrowing answer when the predicate itself fails
      */
-    private static boolean testUserPredicate(Predicate<Object> predicate, Object userId) {
+    private static boolean testUserPredicate(Predicate<Object> predicate, Object userId,
+                                             boolean valueWhenUnknown, boolean valueWhenThrowing) {
         if (predicate == null || userId == null)
-            return false;
+            return valueWhenUnknown;
         try {
             return predicate.test(userId);
         } catch (Throwable e) {
-            return true;
+            return valueWhenThrowing;
         }
     }
 }
