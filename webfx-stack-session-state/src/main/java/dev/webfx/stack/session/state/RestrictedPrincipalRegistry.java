@@ -111,6 +111,36 @@ public final class RestrictedPrincipalRegistry {
         return testUserPredicate(restrictedUserPredicate, userId);
     }
 
+    // ---------------------------------------------------------------------------------------------
+    // Superseded spellings, kept only so that work already written against them still compiles.
+    //
+    // The accessors above gained a User infix when this class took on a second question, which broke
+    // every existing call site at once. One of those call sites is in the image endpoints, a security
+    // fix that is awaiting release while the endpoints it closes are still open; making that branch
+    // rebase or take a fixup commit to ship would be the wrong way round. These forwarders let it
+    // ship untouched.
+    //
+    // Delete the whole block once it has merged. There is no behaviour here, only the old names.
+    // ---------------------------------------------------------------------------------------------
+
+    /** @deprecated Renamed to {@link #registerRestrictedUserPredicate(Predicate)}. */
+    @Deprecated
+    public static void registerPredicate(Predicate<Object> restrictedPrincipalPredicate) {
+        registerRestrictedUserPredicate(restrictedPrincipalPredicate);
+    }
+
+    /** @deprecated Renamed to {@link #isCurrentUserRestricted()}. */
+    @Deprecated
+    public static boolean isCurrentRestricted() {
+        return isCurrentUserRestricted();
+    }
+
+    /** @deprecated Renamed to {@link #isUserRestricted(Object)}. */
+    @Deprecated
+    public static boolean isRestricted(Object userId) {
+        return isUserRestricted(userId);
+    }
+
     /**
      * Shared evaluation for both questions: absent predicate or absent principal answers false, and a
      * predicate that throws answers true.
