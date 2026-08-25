@@ -321,7 +321,7 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
      * anything about what kind of session is restricted or why.
      */
     private static Future<Void> checkWriteAllowed() {
-        if (RestrictedPrincipalRegistry.isCurrentRestricted())
+        if (RestrictedPrincipalRegistry.isCurrentUserRestricted())
             return Future.failedFuture("[ReadOnlySessionError] This session is not allowed to modify data");
         return Future.succeededFuture();
     }

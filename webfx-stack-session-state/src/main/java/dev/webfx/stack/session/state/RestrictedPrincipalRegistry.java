@@ -3,7 +3,9 @@ package dev.webfx.stack.session.state;
 import java.util.function.Predicate;
 
 /**
- * Declares which authenticated principals are allowed to look but not touch.
+ * Answers two questions about an authenticated principal that only the application can answer:
+ * whether a registered user account is behind it, and whether that user is allowed to look but not
+ * touch.
  *
  * <p>Sibling of {@link AuditActorRegistry}, and deliberately the same shape. The stack has no idea
  * what a user IS — {@link ThreadLocalStateHolder#getUserId()} returns a generic Object — so the
@@ -17,24 +19,67 @@ import java.util.function.Predicate;
  * hole. Enforcing it once, at the bottom, means no path can miss it.
  *
  * <p>Unregistered is a supported state, not a failure: nothing is restricted, exactly as before
- * anything registered. The same goes for a predicate that throws — see {@link #isCurrentRestricted()}
+ * anything registered. The same goes for a predicate that throws — see {@link #isCurrentUserRestricted()}
  * for why that resolves the way it does.
  *
  * @author Claude Code
  */
 public final class RestrictedPrincipalRegistry {
 
-    private static Predicate<Object> restrictedPrincipalPredicate;
+    private static Predicate<Object> registeredUserPredicate;
+    private static Predicate<Object> restrictedUserPredicate;
 
     private RestrictedPrincipalRegistry() {}
+
+    /**
+     * Declares how to recognise a principal that belongs to a registered user account, as opposed to
+     * a guest, an anonymous caller or a principal type this application does not issue.
+     *
+     * <p>Exists so that callers can stop writing {@code instanceof} against an application principal
+     * class. The REST image endpoints are the first: they have to know whether there is an account
+     * behind an upload, and asking here is what keeps that decision out of the application's authn
+     * module. Same registration rule as {@link #registerRestrictedUserPredicate} — last one wins, and
+     * several gateways may register the same rule without harm, since it is about the principal TYPE
+     * rather than about how the user signed in.
+     */
+    public static void setRegisteredUserPredicate(Predicate<Object> registeredUserPredicate) {
+        RestrictedPrincipalRegistry.registeredUserPredicate = registeredUserPredicate;
+    }
 
     /**
      * Declares how to recognise a read-only principal. Last registration wins; several gateways may
      * register the same rule without harm, since it is about the principal TYPE rather than about
      * how the user signed in.
      */
-    public static void registerPredicate(Predicate<Object> restrictedPrincipalPredicate) {
-        RestrictedPrincipalRegistry.restrictedPrincipalPredicate = restrictedPrincipalPredicate;
+    public static void registerRestrictedUserPredicate(Predicate<Object> restrictedUserPredicate) {
+        RestrictedPrincipalRegistry.restrictedUserPredicate = restrictedUserPredicate;
+    }
+
+    /**
+     * Whether a registered user account is behind the principal on this thread.
+     *
+     * <p>Only safe where the thread-local still holds the principal, i.e. in the synchronous part of
+     * a call. Past the first async hop, use {@link #isUserRegistered(Object)} with a principal
+     * captured earlier — see {@link #isUserRestricted(Object)} for why.
+     */
+    public static boolean isCurrentUserRegistered() {
+        return isUserRegistered(ThreadLocalStateHolder.getUserId());
+    }
+
+    /**
+     * Whether a registered user account is behind this specific principal.
+     *
+     * <p>Nothing registered, or nobody on the request, answers "no", so a caller that must be a
+     * registered user is refused rather than admitted. That is the conservative direction for this
+     * question, but note it is the same raw value that answers "not restricted" for
+     * {@link #isUserRestricted(Object)}, where the conservative direction is the opposite one. The
+     * two questions share {@code testUserPredicate} and therefore share its defaults; they do not
+     * share what a default costs. See that method for the case where this matters.
+     *
+     * @param userId the principal to judge, typically captured at request-creation time
+     */
+    public static boolean isUserRegistered(Object userId) {
+        return testUserPredicate(registeredUserPredicate, userId);
     }
 
     /**
@@ -46,8 +91,8 @@ public final class RestrictedPrincipalRegistry {
      * failing to establish that a session is allowed to write must not permit the write. When this
      * question cannot be answered, the safe answer is no.
      */
-    public static boolean isCurrentRestricted() {
-        return isRestricted(ThreadLocalStateHolder.getUserId());
+    public static boolean isCurrentUserRestricted() {
+        return isUserRestricted(ThreadLocalStateHolder.getUserId());
     }
 
     /**
@@ -62,8 +107,26 @@ public final class RestrictedPrincipalRegistry {
      *
      * @param userId the principal to judge, typically captured at request-creation time
      */
-    public static boolean isRestricted(Object userId) {
-        Predicate<Object> predicate = restrictedPrincipalPredicate;
+    public static boolean isUserRestricted(Object userId) {
+        return testUserPredicate(restrictedUserPredicate, userId);
+    }
+
+    /**
+     * Shared evaluation for both questions: absent predicate or absent principal answers false, and a
+     * predicate that throws answers true.
+     *
+     * <p><b>Both defaults were chosen for the restricted question and are safe only there.</b> For
+     * "is this user restricted", false-when-unknown preserves the behaviour that existed before
+     * anything registered, and true-when-throwing refuses the write. For "is this user registered"
+     * the throwing case inverts: it reports an unrecognised principal as a registered user, and a
+     * caller gated on {@code isUserRegistered} would be admitted rather than refused.
+     *
+     * <p>No predicate registered today can throw — both are {@code instanceof} tests — so this is a
+     * trap for the next one rather than a live defect. It wants a per-question default (the value to
+     * answer when the predicate throws, passed in by the caller) before a predicate that can fail is
+     * ever registered.
+     */
+    private static boolean testUserPredicate(Predicate<Object> predicate, Object userId) {
         if (predicate == null || userId == null)
             return false;
         try {
