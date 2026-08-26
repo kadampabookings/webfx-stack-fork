@@ -2,6 +2,8 @@ package dev.webfx.stack.db.submit;
 
 import dev.webfx.platform.async.Future;
 
+import java.util.Map;
+
 /**
  * Which entities may not be written without the application's say-so, and who to ask.
  *
@@ -28,19 +30,38 @@ public final class ProtectedEntityWriteRegistry {
     /** The three ways a DQL statement can change rows. */
     public enum WriteVerb { INSERT, UPDATE, DELETE }
 
+    /**
+     * Everything the seam could determine about one write.
+     *
+     * @param writtenFields the fields this statement SETS, empty for a delete
+     * @param writtenValues those fields' values where they resolve to a scalar — an insert names its
+     *                      owner here ({@code insert Document set person=$1}), which is how a new row's
+     *                      ownership can be judged without a row existing to look up
+     * @param targetId      the id of the row being changed, when the statement selects one by primary
+     *                      key — and <b>null when it could not be determined</b>, which covers a delete
+     *                      or update whose WHERE is anything more interesting than {@code id = value}.
+     *                      <p><b>Null is not "no constraint", it is "unknown".</b> A policy that decides
+     *                      by ownership must DENY on null: a statement whose target this could not read
+     *                      is precisely the statement that would be used to reach somebody else's row.
+     *                      Reading null as "not applicable" would make the check optional at the
+     *                      attacker's discretion.
+     */
+    public record WriteRequest(
+        String entityName,
+        WriteVerb verb,
+        String[] writtenFields,
+        Map<String, Object> writtenValues,
+        Object targetId
+    ) {}
+
     @FunctionalInterface
     public interface WriteAuthorizer {
         /**
-         * @param writtenFields the fields this statement SETS, empty for a delete. Supplied because a
-         *                      row is not always uniform in what it protects: an account's language is
-         *                      ordinary user data while the flag deciding whether it may reach the back
-         *                      office is not, and they live side by side. Entity granularity alone must
-         *                      either refuse the ordinary write or permit the privileged one.
          * @return a future true if this write may proceed. A future false, or a failure, denies it — the
          *         caller treats anything that is not an explicit yes as no, so an authorizer that throws
          *         or times out withholds the write rather than waving it through.
          */
-        Future<Boolean> isWriteAuthorized(String entityName, WriteVerb verb, String[] writtenFields);
+        Future<Boolean> isWriteAuthorized(WriteRequest request);
     }
 
     /** Told after a protected write has actually happened — see {@link #registerWriteObserver}. */
@@ -120,14 +141,14 @@ public final class ProtectedEntityWriteRegistry {
      * already knows how to surface, and — more to the point — cannot be mistaken for a successful
      * no-op by a code path that forgot to inspect a boolean.
      */
-    public static Future<Void> checkWriteAllowed(String entityName, WriteVerb verb, String[] writtenFields) {
+    public static Future<Void> checkWriteAllowed(WriteRequest request) {
         WriteAuthorizer currentAuthorizer = authorizer;
         if (currentAuthorizer == null)
             return Future.succeededFuture();
-        return currentAuthorizer.isWriteAuthorized(entityName, verb, writtenFields)
+        return currentAuthorizer.isWriteAuthorized(request)
             .otherwise(false) // an authorizer that fails denies; it does not abstain
             .compose(authorized -> Boolean.TRUE.equals(authorized)
                 ? Future.succeededFuture()
-                : Future.failedFuture("[NotAuthorizedError] Not authorized to " + verb + " " + entityName));
+                : Future.failedFuture("[NotAuthorizedError] Not authorized to " + request.verb() + " " + request.entityName()));
     }
 }

@@ -93,18 +93,43 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * so an entity whose fields are individually protected should also carry an entity-level rule, or a
      * statement this cannot read would slip past on a technicality.
      */
-    private static String[] writtenFieldsOf(DqlStatement<Object> dqlStatement) {
+    private static java.util.Map<String, Object> writtenValuesOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
         ExpressionArray<Object> setClause =
               dqlStatement instanceof Update ? ((Update<Object>) dqlStatement).getSetClause()
             : dqlStatement instanceof Insert ? ((Insert<Object>) dqlStatement).getSetClause()
             : null;
         if (setClause == null)
-            return new String[0];
-        java.util.List<String> names = new java.util.ArrayList<>();
+            return java.util.Collections.emptyMap();
+        // Ordered, so the field list handed to a policy reads in statement order rather than hash order.
+        java.util.Map<String, Object> values = new java.util.LinkedHashMap<>();
         for (Expression<?> expression : setClause.getExpressions())
-            if (expression instanceof Equals && ((Equals<?>) expression).getLeft() instanceof DomainField field)
-                names.add(field.getName());
-        return names.toArray(String[]::new);
+            if (expression instanceof Equals equals && equals.getLeft() instanceof DomainField field)
+                // A value that is not a resolvable scalar maps to null: the FIELD was written (so a
+                // field rule still fires) but its value is unknown to us, which a policy reading values
+                // must treat as unknown rather than as absent.
+                values.put(field.getName(), DqlScopeUtil.resolveScalarValue(equals.getRight(), parameters));
+        return values;
+    }
+
+    /**
+     * The id of the row a statement changes, or null when that cannot be read.
+     *
+     * <p>Only a WHERE that is exactly {@code id = value} yields an answer, which covers what the change
+     * set layer generates ({@code update Person set … where id=$2}) and deliberately nothing cleverer.
+     * Anything else — a compound condition, a subquery, a non-id predicate — returns null.
+     *
+     * <p>Returning null for what this cannot read is the whole safety of the thing, and only works
+     * because null means UNKNOWN to a policy rather than UNCONSTRAINED. An ownership rule must refuse a
+     * write whose target it cannot see: a statement shaped to defeat this extraction is exactly the
+     * statement that would be used to reach somebody else's row.
+     */
+    private static Object targetIdOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
+        Expression<?> where = dqlStatement.getWhere();
+        if (where instanceof Equals equals
+            && equals.getLeft() instanceof DomainField field
+            && "id".equals(field.getName()))
+            return DqlScopeUtil.resolveScalarValue(equals.getRight(), parameters);
+        return null;
     }
 
     private record ProtectedWrite(String entityName, ProtectedEntityWriteRegistry.WriteVerb verb) {}
@@ -145,7 +170,14 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         DomainClass resolved = domainClass instanceof DomainClass ? (DomainClass) domainClass
             : dataSourceModel.getDomainModel().getClass(domainClass);
         String entityName = resolved.getName();
-        return ProtectedEntityWriteRegistry.checkWriteAllowed(entityName, verb, writtenFieldsOf(dqlStatement))
+        Object[] parameters = argument.getParameters();
+        java.util.Map<String, Object> writtenValues = writtenValuesOf(dqlStatement, parameters);
+        ProtectedEntityWriteRegistry.WriteRequest request = new ProtectedEntityWriteRegistry.WriteRequest(
+            entityName, verb,
+            writtenValues.keySet().toArray(String[]::new),
+            writtenValues,
+            targetIdOf(dqlStatement, parameters));
+        return ProtectedEntityWriteRegistry.checkWriteAllowed(request)
             .map(ignored -> new ProtectedWrite(entityName, verb));
     }
 
