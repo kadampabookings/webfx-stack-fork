@@ -10,6 +10,7 @@ import dev.webfx.stack.session.isolation.IsolatedSession;
 import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.SessionAccessor;
 import dev.webfx.stack.session.state.StateAccessor;
+import dev.webfx.stack.session.token.PrincipalToken;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
 import java.util.HashMap;
@@ -82,6 +83,7 @@ public final class ServerSideStateSessionSyncer {
     }
 
     private static Future<IsolatedSession> syncFixedServerSessionFromIncomingClientStateWithUserIdCheckFirst(IsolatedSession serverSession, Object clientState, boolean forceStore) {
+        applyIdentityToken(clientState);
         Object userId = StateAccessor.getUserId(clientState);
         Object sessionUserId = SessionAccessor.getUserId(serverSession);
         // A "public" principal is one that isn't a logged-in user: either no userId at all (never logged in),
@@ -172,6 +174,49 @@ public final class ServerSideStateSessionSyncer {
                 pendingUserIdChecks.remove(sessionId);
         });
         return checkFuture;
+    }
+
+    /**
+     * Replaces the caller's CLAIMED identity with the one this server can prove, when it presented a token.
+     *
+     * <p>Everything below this line reads the userId out of the client's own message. That is the whole of
+     * security item 6: the server learns who is calling by reading a field the caller wrote. A token is the
+     * server's own signed statement handed back to it, so where one is present it is the better answer and
+     * it simply overwrites the claim — the rest of the flow then proceeds unchanged, on an identity that
+     * was established rather than asserted.
+     *
+     * <p>Three cases, and the middle one is the point of the exercise:
+     *
+     * <ul>
+     *   <li><b>No token</b> — the claim stands, exactly as before. This is the migration path: clients do
+     *       not send tokens yet, and a server that refused them would refuse every user. It is also the
+     *       case that must eventually STOP being tolerated; until the flip, this method is an upgrade for
+     *       callers that have a token and no change at all for those that do not.</li>
+     *   <li><b>Valid token</b> — its principal wins over whatever the message claimed. A caller presenting
+     *       a valid token for one user while claiming to be another is treated as the user the token names.</li>
+     *   <li><b>Token present but not valid</b> — forged, altered, expired, or signed with a key this server
+     *       no longer accepts. The claim is NOT honoured as a fallback: a caller holding a token that does
+     *       not verify has something wrong with it, and quietly dropping back to the weaker path would let
+     *       anyone defeat this check by sending rubbish. Treated as logged out, and logged, because it is
+     *       the one case here that should be visible to a human.</li>
+     * </ul>
+     *
+     * <p>Cheaper than the database check it will eventually replace, which is what allows it to run on every
+     * message rather than only on a login transition — the reason the skip conditions below exist at all.
+     */
+    private static void applyIdentityToken(Object clientState) {
+        String token = StateAccessor.getUserToken(clientState);
+        if (token == null || token.isEmpty())
+            return;
+        Object principal = PrincipalToken.verify(token, System.currentTimeMillis());
+        if (principal != null) {
+            StateAccessor.setUserId(clientState, principal);
+        } else {
+            // Not an error the caller can be told apart: forged and expired look identical on purpose, so a
+            // probe learns nothing from the response. The server log is where the distinction would be made.
+            Console.log("🛡 Identity token presented but not valid — treating as logged out");
+            StateAccessor.setUserId(clientState, LogoutUserId.LOGOUT_USER_ID);
+        }
     }
 
     private static Future<IsolatedSession> syncFixedServerSessionFromIncomingClientState(IsolatedSession serverSession, Object clientState, boolean forceStore) {
