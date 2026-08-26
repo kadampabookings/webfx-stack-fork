@@ -49,7 +49,8 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
 
     private static Future<SubmitResult> interceptAndExecuteSubmit(SubmitArgument argument, SubmitServiceProvider targetProvider) {
         return authorizeIfProtected(argument)
-            .compose(ignored -> targetProvider.executeSubmit(translateSubmit(argument)));
+            .compose(protectedWrite -> targetProvider.executeSubmit(translateSubmit(argument))
+                .onSuccess(ignored -> reportIfProtected(protectedWrite)));
     }
 
     private static Future<Batch<SubmitResult>> interceptAndExecuteSubmitBatch(Batch<SubmitArgument> batch, SubmitServiceProvider targetProvider) {
@@ -57,10 +58,17 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         // one unauthorized statement anywhere in it is enough to make the whole thing something this
         // caller may not do — and checking only the first would make "hide it behind a legitimate write"
         // the obvious way through.
+        java.util.List<ProtectedWrite> protectedWrites = new java.util.ArrayList<>();
         Future<Void> authorized = Future.succeededFuture();
         for (SubmitArgument argument : batch.getArray())
-            authorized = authorized.compose(ignored -> authorizeIfProtected(argument));
-        return authorized.compose(ignored -> targetProvider.executeSubmitBatch(translateBatch(batch)));
+            authorized = authorized.compose(ignored -> authorizeIfProtected(argument)
+                .map(protectedWrite -> {
+                    if (protectedWrite != null)
+                        protectedWrites.add(protectedWrite);
+                    return null;
+                }));
+        return authorized.compose(ignored -> targetProvider.executeSubmitBatch(translateBatch(batch))
+            .onSuccess(result -> protectedWrites.forEach(DqlSubmitInterceptorInitializer::reportIfProtected)));
     }
 
     /**
@@ -75,17 +83,25 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * <p>Statements are parsed only when the registry's textual pre-filter says a protected name might
      * be involved, so the common write pays one substring scan rather than a parse.
      */
-    private static Future<Void> authorizeIfProtected(SubmitArgument argument) {
+    private record ProtectedWrite(String entityName, ProtectedEntityWriteRegistry.WriteVerb verb) {}
+
+    /** Reported only AFTER the write actually landed: an attempt that failed changed nothing to react to. */
+    private static void reportIfProtected(ProtectedWrite protectedWrite) {
+        if (protectedWrite != null)
+            ProtectedEntityWriteRegistry.notifyWriteSucceeded(protectedWrite.entityName(), protectedWrite.verb());
+    }
+
+    private static Future<ProtectedWrite> authorizeIfProtected(SubmitArgument argument) {
         String statement = argument.getStatement();
         if (argument.getLanguage() == null // already SQL: not a DQL statement to reason about
             || !ProtectedEntityWriteRegistry.mayTouchProtectedEntity(statement))
-            return Future.succeededFuture();
+            return Future.succeededFuture(null);
         Object dataSourceId = argument.getDataSourceId();
         if (!LocalDataSourceService.isDataSourceLocal(dataSourceId))
-            return Future.succeededFuture();
+            return Future.succeededFuture(null);
         DataSourceModel dataSourceModel = DataSourceModelService.getDataSourceModel(dataSourceId);
         if (dataSourceModel == null)
-            return Future.succeededFuture();
+            return Future.succeededFuture(null);
         DqlStatement<Object> dqlStatement;
         try {
             dqlStatement = dataSourceModel.parseStatement(statement);
@@ -100,11 +116,13 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
             : dqlStatement instanceof Delete ? ProtectedEntityWriteRegistry.WriteVerb.DELETE
             : null;
         if (verb == null) // not a write
-            return Future.succeededFuture();
+            return Future.succeededFuture(null);
         Object domainClass = dqlStatement.getDomainClass();
         DomainClass resolved = domainClass instanceof DomainClass ? (DomainClass) domainClass
             : dataSourceModel.getDomainModel().getClass(domainClass);
-        return ProtectedEntityWriteRegistry.checkWriteAllowed(resolved.getName(), verb);
+        String entityName = resolved.getName();
+        return ProtectedEntityWriteRegistry.checkWriteAllowed(entityName, verb)
+            .map(ignored -> new ProtectedWrite(entityName, verb));
     }
 
     private static SubmitArgument translateSubmit(SubmitArgument argument) {

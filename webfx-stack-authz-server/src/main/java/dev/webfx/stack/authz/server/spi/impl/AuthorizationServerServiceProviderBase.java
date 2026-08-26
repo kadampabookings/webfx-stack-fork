@@ -43,7 +43,25 @@ public abstract class AuthorizationServerServiceProviderBase implements Authoriz
 
     private record RegistryKey(Object principal, boolean backoffice) {}
 
-    private final Map<RegistryKey, Future<InMemoryAuthorizationRuleRegistry>> registryCache = new ConcurrentHashMap<>();
+    private record CachedRegistry(Future<InMemoryAuthorizationRuleRegistry> future, long computedAtMillis) {}
+
+    /**
+     * How long a principal's parsed rules may outlive a change to them.
+     *
+     * <p>This cache had no expiry at all, which meant a REVOKED privilege kept working on any instance
+     * that had already cached that principal — not for a window, but until the process restarted. That
+     * was invisible while nothing enforced anything; the moment enforcement is real it is the difference
+     * between a revocation and a suggestion.
+     *
+     * <p>Invalidation on an authorization write (see {@link #invalidateAllRuleRegistries()}) makes the
+     * change immediate on the instance that SAW the write. This TTL is what bounds it everywhere else:
+     * production runs more than one instance, and the one that did not serve the write has no idea
+     * anything changed. Belt and braces, in that order — the fast path for the common case, a bounded
+     * worst case for the rest.
+     */
+    private static final long REGISTRY_CACHE_TTL_MILLIS = 120_000;
+
+    private final Map<RegistryKey, CachedRegistry> registryCache = new ConcurrentHashMap<>();
 
     @Override
     public Future<Boolean> isAuthorized(Object operationAuthorizationRequest) {
@@ -81,10 +99,17 @@ public abstract class AuthorizationServerServiceProviderBase implements Authoriz
 
     protected Future<InMemoryAuthorizationRuleRegistry> getOrCreateRuleRegistry(Object userId, boolean backoffice) {
         RegistryKey key = new RegistryKey(userId, backoffice);
-        Future<InMemoryAuthorizationRuleRegistry> future =
-            registryCache.computeIfAbsent(key, k -> createUserRuleRegistry(k.principal(), k.backoffice()));
+        long now = System.currentTimeMillis();
+        CachedRegistry cached = registryCache.get(key);
+        // Reusable while still in flight (so concurrent checks share one computation) or young enough.
+        if (cached != null && (!cached.future().isComplete()
+                               || cached.future().succeeded() && now - cached.computedAtMillis() < REGISTRY_CACHE_TTL_MILLIS))
+            return cached.future();
+        Future<InMemoryAuthorizationRuleRegistry> future = createUserRuleRegistry(key.principal(), key.backoffice());
+        CachedRegistry entry = new CachedRegistry(future, now);
+        registryCache.put(key, entry);
         // A failed computation must not be served to the next caller — drop it so the next one retries.
-        future.onFailure(e -> registryCache.remove(key, future));
+        future.onFailure(e -> registryCache.remove(key, entry));
         return future;
     }
 
@@ -92,6 +117,18 @@ public abstract class AuthorizationServerServiceProviderBase implements Authoriz
     protected void invalidateRuleRegistry(Object userId) {
         Object principal = normalisedPrincipal(userId);
         registryCache.keySet().removeIf(k -> java.util.Objects.equals(k.principal(), principal));
+    }
+
+    /**
+     * Discard every cached registry, for when the rules themselves changed rather than one principal's.
+     *
+     * <p>All of them, because a row in the authorization tables does not say whom it affects: a rule
+     * attached to a role reaches everyone holding that role, and working out who that is would mean
+     * running the very queries this cache exists to avoid. Flushing is cheap and correct, and
+     * authorization edits are rare — the expensive option here would be the clever one.
+     */
+    public void invalidateAllRuleRegistries() {
+        registryCache.clear();
     }
 
     /**

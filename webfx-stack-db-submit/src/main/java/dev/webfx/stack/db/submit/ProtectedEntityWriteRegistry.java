@@ -38,7 +38,14 @@ public final class ProtectedEntityWriteRegistry {
         Future<Boolean> isWriteAuthorized(String entityName, WriteVerb verb);
     }
 
+    /** Told after a protected write has actually happened — see {@link #registerWriteObserver}. */
+    @FunctionalInterface
+    public interface WriteObserver {
+        void onProtectedWriteSucceeded(String entityName, WriteVerb verb);
+    }
+
     private static volatile WriteAuthorizer authorizer;
+    private static volatile WriteObserver observer;
     /** Lower-cased, so the pre-filter below can match a statement whatever case it was written in. */
     private static volatile String[] protectedEntityNamesLowerCase = new String[0];
 
@@ -57,6 +64,30 @@ public final class ProtectedEntityWriteRegistry {
 
     public static boolean hasAuthorizer() {
         return authorizer != null;
+    }
+
+    /**
+     * Registers something to be told when a protected write SUCCEEDS.
+     *
+     * <p>Separate from the authorizer because it answers a different question at a different moment:
+     * the authorizer decides beforehand whether a write may happen, this reports afterwards that one
+     * did. The reason it exists is caching — a rule that has just changed is exactly the rule a cached
+     * decision is now wrong about, and the only component that knows the change happened is the one
+     * that let it through.
+     */
+    public static void registerWriteObserver(WriteObserver writeObserver) {
+        observer = writeObserver;
+    }
+
+    /** Never throws into the caller: a write that succeeded must not be reported as failed by its own bookkeeping. */
+    public static void notifyWriteSucceeded(String entityName, WriteVerb verb) {
+        WriteObserver currentObserver = observer;
+        if (currentObserver != null) {
+            try {
+                currentObserver.onProtectedWriteSucceeded(entityName, verb);
+            } catch (RuntimeException ignored) {
+            }
+        }
     }
 
     /**
