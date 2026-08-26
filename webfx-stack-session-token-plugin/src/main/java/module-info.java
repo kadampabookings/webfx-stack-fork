@@ -11,6 +11,7 @@ module webfx.stack.session.token.plugin {
     requires webfx.platform.boot;
     requires webfx.platform.conf;
     requires webfx.platform.console;
+    requires webfx.platform.substitution;
     requires webfx.stack.session.token;
 
     // Exported packages

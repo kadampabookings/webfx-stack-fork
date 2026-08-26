@@ -4,6 +4,7 @@ import dev.webfx.platform.boot.spi.ApplicationJob;
 import dev.webfx.platform.conf.Config;
 import dev.webfx.platform.conf.ConfigLoader;
 import dev.webfx.platform.console.Console;
+import dev.webfx.platform.substitution.Substitutor;
 import dev.webfx.stack.session.token.SignedToken;
 
 import java.nio.charset.StandardCharsets;
@@ -62,6 +63,15 @@ public final class SessionTokenKeysInitializer implements ApplicationJob {
     private void addKeyIfPresent(List<byte[]> keys, String configuredKey, String keyName) {
         if (configuredKey == null || configuredKey.isBlank())
             return;
+        // An unresolved ${{ VAR }} comes back as the literal template text, not as null. Left alone it
+        // is 38 printable characters, which clears the length bar below and becomes a perfectly usable
+        // HMAC key made of the words "SESSION_TOKEN_PREVIOUS_SIGNING_KEY" — a server signing with a
+        // constant that anyone reading this file can reproduce, while reporting a rotation that is not
+        // happening. Treated as absent, which is what an unset variable means.
+        if (!Substitutor.areValuesNonNullAndResolved(configuredKey)) {
+            Console.log("⚠️ Ignoring " + CONFIG_PATH + "." + keyName + ": its variable is not set");
+            return;
+        }
         byte[] decoded;
         try {
             decoded = Base64.getDecoder().decode(configuredKey.trim());
