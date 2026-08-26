@@ -5,6 +5,7 @@ import dev.webfx.platform.conf.Config;
 import dev.webfx.platform.conf.ConfigLoader;
 import dev.webfx.platform.console.Console;
 import dev.webfx.platform.substitution.Substitutor;
+import dev.webfx.stack.session.token.IdentityTokenPolicy;
 import dev.webfx.stack.session.token.SignedToken;
 
 import java.nio.charset.StandardCharsets;
@@ -31,6 +32,7 @@ public final class SessionTokenKeysInitializer implements ApplicationJob {
     private static final String CONFIG_PATH = "webfx.stack.session.token";
     /** HMAC-SHA256 territory: a key shorter than its 256-bit block buys nothing and hides that it hasn't. */
     private static final int MINIMUM_KEY_BYTES = 32;
+    private static final String REQUIRED_KEY = "required";
 
     @Override
     public void onInit() {
@@ -50,6 +52,46 @@ public final class SessionTokenKeysInitializer implements ApplicationJob {
         else
             Console.log("🔑 Session token signing keys installed (" + keys.size()
                         + (keys.size() == 1 ? " key)" : " keys — a rotation is in progress)"));
+        applyRequiredFlag(config, !keys.isEmpty());
+    }
+
+    /**
+     * Applies the flip, and refuses to run a combination that would lock everyone out.
+     *
+     * <p><b>Required with no usable key logs out every user of this server</b>, including whoever would
+     * fix it: nothing can be minted, so nothing verifies, so every identity is refused — and the process
+     * otherwise looks perfectly healthy, which is what makes it dangerous. Under blue/green that instance
+     * passes its health check and takes production traffic. So this refuses to start instead. A server
+     * that will not come up is a deploy that visibly fails; a server that comes up and rejects everybody
+     * is an outage someone has to diagnose.
+     *
+     * <p>The exception is the belt and the log line is the braces, deliberately in that order: whether a
+     * throw from this callback aborts the boot chain depends on the caller, and this has not been proved
+     * here, so the message is written to be unmissable on its own.
+     */
+    private void applyRequiredFlag(Config config, boolean hasKeys) {
+        String configuredValue = config == null ? null : config.getString(REQUIRED_KEY);
+        // Unset is the safe answer and also the common one: an environment that has never heard of this
+        // setting keeps accepting bare claims, exactly as it did before the token existed. An unresolved
+        // ${{ }} template is treated the same way — see the note on defaults in the declaration file.
+        boolean required = configuredValue != null
+                           && Substitutor.areValuesNonNullAndResolved(configuredValue)
+                           && "true".equalsIgnoreCase(configuredValue.trim());
+        if (required && !hasKeys) {
+            String message = "FATAL: " + CONFIG_PATH + "." + REQUIRED_KEY + " is on but no signing key is"
+                             + " usable — every user would be refused. Set " + CONFIG_PATH + ".signingKey,"
+                             + " or turn " + REQUIRED_KEY + " off.";
+            Console.log("🛑 " + message);
+            throw new IllegalStateException(message);
+        }
+        IdentityTokenPolicy.setTokenRequired(required);
+        if (required)
+            Console.log("🛡 Identity tokens are REQUIRED — a claimed user id with no valid token is refused");
+        else
+            // Said out loud on every boot, because the quiet failure this whole mechanism guards against is
+            // shipping it, believing it is on, and never checking. Silence here would read as success.
+            Console.log("🔓 Identity tokens are accepted but NOT required — a client's claimed user id is"
+                        + " still trusted on its own (" + CONFIG_PATH + "." + REQUIRED_KEY + " is off)");
     }
 
     /**

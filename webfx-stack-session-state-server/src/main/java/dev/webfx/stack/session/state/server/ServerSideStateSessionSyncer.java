@@ -10,6 +10,7 @@ import dev.webfx.stack.session.isolation.IsolatedSession;
 import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.SessionAccessor;
 import dev.webfx.stack.session.state.StateAccessor;
+import dev.webfx.stack.session.token.IdentityTokenPolicy;
 import dev.webfx.stack.session.token.PrincipalToken;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
@@ -185,13 +186,16 @@ public final class ServerSideStateSessionSyncer {
      * it simply overwrites the claim — the rest of the flow then proceeds unchanged, on an identity that
      * was established rather than asserted.
      *
-     * <p>Three cases, and the middle one is the point of the exercise:
+     * <p>Three cases, and which of them closes anything depends on configuration:
      *
      * <ul>
-     *   <li><b>No token</b> — the claim stands, exactly as before. This is the migration path: clients do
-     *       not send tokens yet, and a server that refused them would refuse every user. It is also the
-     *       case that must eventually STOP being tolerated; until the flip, this method is an upgrade for
-     *       callers that have a token and no change at all for those that do not.</li>
+     *   <li><b>No token</b> — decided by {@link IdentityTokenPolicy}, and this is THE flip. While it is off
+     *       the claim stands exactly as before, which is what lets the token be rolled out to clients over
+     *       weeks with no coordination and no visible effect. Turned on, a claimed identity with nothing
+     *       behind it is refused, and item 6 is closed — for as long as it stays on. Note the asymmetry
+     *       worth keeping in mind when reading the rest of this method: every other case here is decided by
+     *       cryptography and cannot be got wrong at runtime, while this one is decided by a configuration
+     *       value that defaults to the insecure answer.</li>
      *   <li><b>Valid token</b> — its principal wins over whatever the message claimed. A caller presenting
      *       a valid token for one user while claiming to be another is treated as the user the token names.</li>
      *   <li><b>Token present but not valid</b> — forged, altered, expired, or signed with a key this server
@@ -206,8 +210,12 @@ public final class ServerSideStateSessionSyncer {
      */
     private static void applyIdentityToken(Object clientState) {
         String token = StateAccessor.getUserToken(clientState);
-        if (token == null || token.isEmpty())
+        if (token == null || token.isEmpty()) {
+            boolean claimsRealIdentity = !LogoutUserId.isLogoutUserIdOrNull(StateAccessor.getUserId(clientState));
+            if (IdentityTokenPolicy.refusesUntokenedClaim(claimsRealIdentity))
+                refuseUntokenedClaim(clientState);
             return;
+        }
         Object principal = PrincipalToken.verify(token, System.currentTimeMillis());
         if (principal != null) {
             StateAccessor.setUserId(clientState, principal);
@@ -216,6 +224,44 @@ public final class ServerSideStateSessionSyncer {
             // probe learns nothing from the response. The server log is where the distinction would be made.
             Console.log("🛡 Identity token presented but not valid — treating as logged out");
             StateAccessor.setUserId(clientState, LogoutUserId.LOGOUT_USER_ID);
+        }
+    }
+
+    /**
+     * Counts refusals since the last report, so the log measures the tail instead of drowning in it.
+     *
+     * <p>Deliberately unsynchronised. Concurrent messages can lose a count or produce two lines in the same
+     * minute; both are acceptable in a number whose only job is to show an operator whether the tail is
+     * shrinking. It is never used to decide anything, which is what makes approximate good enough — do not
+     * grow a decision on top of it without making it atomic first.
+     */
+    private static long untokenedClaimsSinceLastLog;
+    private static long untokenedClaimLastLogMillis;
+    /** One line a minute: enough to watch a tail shrink, few enough not to fill a disk while it does. */
+    private static final long UNTOKENED_CLAIM_LOG_INTERVAL_MILLIS = 60_000;
+
+    /**
+     * Applies the flip to a message that claims an identity with nothing backing it.
+     *
+     * <p>Whether to call this at all is {@link IdentityTokenPolicy#refusesUntokenedClaim(boolean)}, which
+     * is where the reasoning about what counts as a claim lives.
+     *
+     * <p>The rate limit is not cosmetic. This runs on every message from every client, so on the day of the
+     * flip an old client in a reload loop generates these continuously, and one line per message would bury
+     * the very signal an operator is watching for. Counting and reporting periodically turns the same events
+     * into the useful number: how many callers are still on a build that cannot hold a token.
+     */
+    private static void refuseUntokenedClaim(Object clientState) {
+        StateAccessor.setUserId(clientState, LogoutUserId.LOGOUT_USER_ID);
+        long now = System.currentTimeMillis();
+        untokenedClaimsSinceLastLog++;
+        if (now - untokenedClaimLastLogMillis >= UNTOKENED_CLAIM_LOG_INTERVAL_MILLIS) {
+            untokenedClaimLastLogMillis = now;
+            // The claimed identity is deliberately not logged: it is unproven by definition, so recording it
+            // would write attacker-chosen values — plausibly someone else's user id — into the log.
+            Console.log("🛡 Refused " + untokenedClaimsSinceLastLog + " identity claim(s) with no token"
+                        + " (webfx.stack.session.token.required is on)");
+            untokenedClaimsSinceLastLog = 0;
         }
     }
 
@@ -240,11 +286,37 @@ public final class ServerSideStateSessionSyncer {
         return Future.succeededFuture(serverSession);
     }
 
+    /**
+     * The identity the session may lend to a message that did not state one — nothing, once tokens are required.
+     *
+     * <p>Without this, the flip would refuse a claimed identity while still granting an unclaimed one, and
+     * SAYING NOTHING WOULD BE STRONGER THAN CLAIMING SOMETHING: a caller naming a user is turned away, while
+     * the same caller omitting the field is handed whatever user the session holds. The claim check alone
+     * closes the front door and leaves this open, so both belong to the same flag.
+     *
+     * <p>Under the flag this suppression costs nothing for a client that proves itself, which is what makes
+     * it safe to pair with the other half. By the time this runs, a valid token has already put its principal
+     * in the state and a refused claim has already put LOGOUT_USER_ID there — both are "set", so neither is
+     * back-filled either way. The only case this changes is the one with nothing behind it at all.
+     *
+     * <p><b>It is also the half that breaks clients relying on the session to remember them</b> — the WebFX
+     * Java clients send their user id only when it changes, so between changes this back-fill is what keeps
+     * them logged in. That is not collateral damage but the same fact stated from the other side: a session
+     * id is a bearer credential, and "logged in because an earlier message on this session was" is precisely
+     * the inference the token exists to replace.
+     */
+    private static Object backFillableUserId(IsolatedSession serverSession) {
+        Object sessionUserId = SessionAccessor.getUserId(serverSession);
+        if (IdentityTokenPolicy.isTokenRequired() && !LogoutUserId.isLogoutUserIdOrNull(sessionUserId))
+            return null; // unset, so the message stays anonymous rather than inheriting an unproven identity
+        return sessionUserId;
+    }
+
     private static Object syncIncomingClientStateFromServerSession(Object clientState, IsolatedSession serverSession) {
         // clientState.serverSessionId <= serverSession.id ? ALWAYS, because this is the server session that is responsible for the session id
         clientState = StateAccessor.setServerSessionId(clientState, serverSession.id(), true);
         // clientState.userId <= serverSession.userId ? YES IF NOT SET, otherwise this means the client switched user, so we keep that info
-        clientState = StateAccessor.setUserId(clientState, SessionAccessor.getUserId(serverSession), false);
+        clientState = StateAccessor.setUserId(clientState, backFillableUserId(serverSession), false);
         // clientState.runId <= serverSession.runId ? YES IF NOT SET, otherwise this means the client communicates it, so we keep that info
         clientState = StateAccessor.setRunId(clientState, SessionAccessor.getRunId(serverSession), false);
         // clientState.backoffice <= serverSession.backoffice ? YES IF NOT SET, otherwise this means the client communicates it, so we keep that info
