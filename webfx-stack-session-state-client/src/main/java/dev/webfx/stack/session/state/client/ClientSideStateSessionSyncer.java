@@ -57,6 +57,10 @@ public final class ClientSideStateSessionSyncer {
             clientSideStateSession.changeServerSessionId(StateAccessor.getServerSessionId(incomingState), true, true);
             // clientSession.userId <= incomingState.userId ? YES IF SET, as this means the server communicates the user id
             clientSideStateSession.changeUserId(StateAccessor.getUserId(incomingState), true, true);
+            // clientSession.userToken <= incomingState.userToken ? YES IF SET, as this means the server minted a new one.
+            // AFTER the user id on purpose: a logout arrives as LOGOUT_USER_ID and clears the token above, and doing it
+            // in this order means a token riding along in that same message cannot resurrect what the logout cleared.
+            clientSideStateSession.changeUserToken(StateAccessor.getUserToken(incomingState), true);
             // clientSession.runId <= incomingState.runId ? NEVER, as the server never communicates it (and is not supposed to)
             // The runId is not stored in the client session anyway (as it's a different id on each run)
         }
@@ -94,6 +98,9 @@ public final class ClientSideStateSessionSyncer {
         outgoingState = clientSideStateSession.setOutgoingServerSessionIdIfNotYetSent(outgoingState);
         // outgoingState.userId <= clientSession.userId ? YES IF NOT YET SENT TO SERVER
         outgoingState = clientSideStateSession.setOutgoingUserIdIfNotYetSent(outgoingState);
+        // outgoingState.userToken <= clientSession.userToken ? ALWAYS (the server checks it on every message, so
+        // "if not yet sent" would leave almost every message unprovable — see setOutgoingUserToken)
+        outgoingState = clientSideStateSession.setOutgoingUserToken(outgoingState);
         // outgoingState.runId <= clientSession.runId ? YES IF NOT YET SENT TO SERVER
         outgoingState = clientSideStateSession.setOutgoingRunIdIfNotYetSent(outgoingState);
         // outgoingState.backoffice <= clientSession.backoffice ? YES IF NOT YET SENT TO SERVER
