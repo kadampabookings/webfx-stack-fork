@@ -12,6 +12,7 @@ import dev.webfx.stack.db.datascope.aggregate.AggregateScopeBuilder;
 import dev.webfx.stack.db.datascope.schema.SchemaScope;
 import dev.webfx.stack.db.datascope.schema.SchemaScopeBuilder;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
+import dev.webfx.stack.db.submit.ProtectedEntityWriteRegistry;
 import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.db.submit.SubmitResult;
 import dev.webfx.stack.db.submit.spi.SubmitServiceProvider;
@@ -47,11 +48,63 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
     }
 
     private static Future<SubmitResult> interceptAndExecuteSubmit(SubmitArgument argument, SubmitServiceProvider targetProvider) {
-        return targetProvider.executeSubmit(translateSubmit(argument));
+        return authorizeIfProtected(argument)
+            .compose(ignored -> targetProvider.executeSubmit(translateSubmit(argument)));
     }
 
     private static Future<Batch<SubmitResult>> interceptAndExecuteSubmitBatch(Batch<SubmitArgument> batch, SubmitServiceProvider targetProvider) {
-        return targetProvider.executeSubmitBatch(translateBatch(batch));
+        // EVERY statement in the batch is authorized, not just the first. A batch is one transaction, so
+        // one unauthorized statement anywhere in it is enough to make the whole thing something this
+        // caller may not do — and checking only the first would make "hide it behind a legitimate write"
+        // the obvious way through.
+        Future<Void> authorized = Future.succeededFuture();
+        for (SubmitArgument argument : batch.getArray())
+            authorized = authorized.compose(ignored -> authorizeIfProtected(argument));
+        return authorized.compose(ignored -> targetProvider.executeSubmitBatch(translateBatch(batch)));
+    }
+
+    /**
+     * Authorizes a write against a protected entity, before it is translated or executed.
+     *
+     * <p>This sits on the DQL path deliberately: here the statement still names an ENTITY and a verb,
+     * which is what a policy is written in terms of. By the time it is SQL those have become a table
+     * name and a keyword, and recovering the intent from the text would be both harder and easier to
+     * fool. The trade is that a statement which never becomes DQL — a raw passthrough — does not pass
+     * this point at all; that door is item 7 and is closed separately.
+     *
+     * <p>Statements are parsed only when the registry's textual pre-filter says a protected name might
+     * be involved, so the common write pays one substring scan rather than a parse.
+     */
+    private static Future<Void> authorizeIfProtected(SubmitArgument argument) {
+        String statement = argument.getStatement();
+        if (argument.getLanguage() == null // already SQL: not a DQL statement to reason about
+            || !ProtectedEntityWriteRegistry.mayTouchProtectedEntity(statement))
+            return Future.succeededFuture();
+        Object dataSourceId = argument.getDataSourceId();
+        if (!LocalDataSourceService.isDataSourceLocal(dataSourceId))
+            return Future.succeededFuture();
+        DataSourceModel dataSourceModel = DataSourceModelService.getDataSourceModel(dataSourceId);
+        if (dataSourceModel == null)
+            return Future.succeededFuture();
+        DqlStatement<Object> dqlStatement;
+        try {
+            dqlStatement = dataSourceModel.parseStatement(statement);
+        } catch (RuntimeException e) {
+            // Unparseable here but possibly executable later: refuse rather than let something this
+            // check could not read reach a protected entity it textually mentions.
+            return Future.failedFuture("[NotAuthorizedError] Could not parse a statement naming a protected entity");
+        }
+        ProtectedEntityWriteRegistry.WriteVerb verb =
+              dqlStatement instanceof Insert ? ProtectedEntityWriteRegistry.WriteVerb.INSERT
+            : dqlStatement instanceof Update ? ProtectedEntityWriteRegistry.WriteVerb.UPDATE
+            : dqlStatement instanceof Delete ? ProtectedEntityWriteRegistry.WriteVerb.DELETE
+            : null;
+        if (verb == null) // not a write
+            return Future.succeededFuture();
+        Object domainClass = dqlStatement.getDomainClass();
+        DomainClass resolved = domainClass instanceof DomainClass ? (DomainClass) domainClass
+            : dataSourceModel.getDomainModel().getClass(domainClass);
+        return ProtectedEntityWriteRegistry.checkWriteAllowed(resolved.getName(), verb);
     }
 
     private static SubmitArgument translateSubmit(SubmitArgument argument) {
