@@ -7,6 +7,11 @@
  */
 module webfx.stack.session.token {
 
+    // Direct dependencies modules
+    requires webfx.platform.ast;
+    requires webfx.platform.ast.json.plugin;
+    requires webfx.stack.com.serial;
+
     // Exported packages
     exports dev.webfx.stack.session.token;
 
