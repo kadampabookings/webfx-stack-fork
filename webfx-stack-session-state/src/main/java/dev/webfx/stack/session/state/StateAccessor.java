@@ -16,6 +16,9 @@ public final class StateAccessor {
 
     private final static String SERVER_SESSION_ID_ATTRIBUTE_NAME = "sessionId";
     private final static String USER_ID_ATTRIBUTE_NAME = "userId";
+    // The signed, expiring proof of who the caller is. Carried beside userId rather than replacing it
+    // while clients are migrated; the point of the exercise is the day userId alone stops being believed.
+    private final static String USER_TOKEN_ATTRIBUTE_NAME = "userToken";
     private final static String RUN_ID_ATTRIBUTE_NAME = "runId";
     private final static String BACKOFFICE_ATTRIBUTE_NAME = "backoffice";
     // Invariant per-connection client facts, sent once at (re)connection and kept in the server session.
@@ -106,6 +109,21 @@ public final class StateAccessor {
 
     public static Object createUserIdState(Object userId) {
         return setUserId(null, userId);
+    }
+
+    /**
+     * The caller's signed identity token, if it presented one.
+     *
+     * <p>Opaque here on purpose: this class is shared with clients, and minting or verifying needs a
+     * secret that only a server may hold. A client's whole relationship with this value is to store what
+     * it was given and send it back.
+     */
+    public static String getUserToken(Object state) {
+        return (String) getStateAttribute(state, USER_TOKEN_ATTRIBUTE_NAME);
+    }
+
+    public static Object setUserToken(Object state, String userToken) {
+        return setStateAttribute(state, USER_TOKEN_ATTRIBUTE_NAME, userToken, true);
     }
 
     public static String getRunId(Object state) {
