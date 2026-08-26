@@ -25,9 +25,23 @@ public final class DbMigrationJob implements ApplicationJob {
 
     private static final String READINESS_GATE_NAME = "db-migration";
     private static final String CONFIG_PATH = "webfx.stack.db.migration";
-    // Set `webfx.stack.db.migration.apply = false` (e.g. in a dev machine's conf/ override) to prevent this
-    // instance from applying migrations — the deployed pipeline is then the only writer of the shared
-    // database's schema. The job just logs the bundled scripts and completes the readiness gate.
+    // `webfx.stack.db.migration.apply` is deliberately THREE-STATE, and the difference between "false"
+    // and "not set" is the whole point:
+    //
+    //   true     — apply them. The deployed image says this, via an override rendered beside the
+    //              datasource one; nothing else should.
+    //   false    — do not apply, and that is a decision someone took: complete the gate and carry on.
+    //              This is what a developer machine sets, so the deployed pipeline is the only writer
+    //              of a shared database's schema.
+    //   NOT SET  — do not apply, and do NOT pretend to be ready. An instance that was never told
+    //              whether it may write the schema is an instance nobody configured, and the failure we
+    //              are guarding is a deployed build whose override went missing: it would otherwise come
+    //              up perfectly healthy against a stale schema and fail later, scattered, at runtime.
+    //              Refusing readiness keeps that loud, and stops a blue/green deployment switching to it.
+    //
+    // Defaulting to false rather than true is what makes a laptop harmless: migrations used to apply
+    // unless you opted out, and the opt-out lived in a gitignored conf/ that nobody inherits — so a fresh
+    // clone silently acquired the power to rewrite the schema of whatever database it was pointed at.
     private static final String APPLY_CONFIG_KEY = "apply";
 
     @Override
@@ -54,9 +68,24 @@ public final class DbMigrationJob implements ApplicationJob {
             return;
         }
         ConfigLoader.onConfigLoaded(CONFIG_PATH, config -> { // config is null when the path is not declared anywhere
-            if (config != null && Boolean.FALSE.equals(config.getBoolean(APPLY_CONFIG_KEY, Boolean.TRUE))) {
+            Boolean configuredApply = config == null ? null : config.getBoolean(APPLY_CONFIG_KEY);
+            if (Boolean.FALSE.equals(configuredApply)) {
                 log("⏭️ DB migration apply is disabled on this instance (" + CONFIG_PATH + "." + APPLY_CONFIG_KEY + " = false) — " + scripts.size() + " scripts bundled but not applied; the deployed pipeline is responsible for applying them");
                 markReady.run();
+                return;
+            }
+            if (!Boolean.TRUE.equals(configuredApply)) {
+                // Neither told to apply nor told not to. Staying unhealthy is the safe answer and the
+                // legible one: on a deployed instance it means an override went missing and the build must
+                // not take traffic; on a developer machine it means deciding, once, whether this instance
+                // may write to the database it is pointed at — which is exactly the decision that used to
+                // be made silently, in the affirmative, by doing nothing.
+                Console.error("❌ DB MIGRATION NOT CONFIGURED — " + CONFIG_PATH + "." + APPLY_CONFIG_KEY
+                    + " is not set, so the " + scripts.size() + " bundled scripts were NOT applied and this"
+                    + " application will stay unhealthy (/health = 503) rather than run against a schema it"
+                    + " may not match. Set it to true where migrations should be applied (the deployed"
+                    + " image does this), or to false to say deliberately that this instance is not the"
+                    + " writer of this database's schema.");
                 return;
             }
             log("Waiting for the datasource before checking DB migrations (" + scripts.size() + " scripts bundled)...");
