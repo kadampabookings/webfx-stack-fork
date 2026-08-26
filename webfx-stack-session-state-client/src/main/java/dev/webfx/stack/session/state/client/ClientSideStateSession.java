@@ -44,6 +44,13 @@ public final class ClientSideStateSession {
     private Runnable scheduledSessionStore;
     private Runnable scheduledListenerCall;
     private int serverIncomingMessageSequence;
+    /**
+     * The server's statement that it no longer accepts a bare claim. In memory only, never stored: it is
+     * re-learned on the first server message of each connection, and the fallback while unknown — send the
+     * user id as well — is the safe one. A stored `true` could outlive a rollback of the flip and leave a
+     * client silently declining to say who it is to a server that still needs to be told.
+     */
+    private boolean tokenRequired;
 
     private ClientSideStateSessionListener clientSideStateSessionListener;
 
@@ -195,6 +202,11 @@ public final class ClientSideStateSession {
         }
     }
 
+    public void setTokenRequired(Boolean tokenRequired) {
+        if (tokenRequired != null)
+            this.tokenRequired = tokenRequired;
+    }
+
     public String getUserToken() {
         return SessionAccessor.getUserToken(clientSession);
     }
@@ -279,6 +291,12 @@ public final class ClientSideStateSession {
     private int nextUserIdSendingSequence = -1;
 
     public Object setOutgoingUserIdIfNotYetSent(Object outgoingState) {
+        // Not at all, once the server requires a token and we hold one: the token already names us, and a
+        // user id beside it is the forgeable half of a pair that can disagree. Note the guard needs the
+        // token to be PRESENT, not merely required — a client that has not got one yet must still be able
+        // to say who it is, or it could never log in.
+        if (tokenRequired && getUserToken() != null)
+            return outgoingState;
         // When do we send the user id stored in the client session back to the server?
         if (nextUserIdSendingSequence == -1) {
             nextUserIdSendingSequence = serverIncomingMessageSequence;

@@ -29,6 +29,7 @@ public final class StateAccessor {
     private final static String SERVER_RUN_ID_ATTRIBUTE_NAME = "serverRunId";
     // Stamped on every server-emitted state envelope; clients drop any envelope without it.
     private final static String SERVER_ORIGIN_ATTRIBUTE_NAME = "serverOrigin";
+    private final static String TOKEN_REQUIRED_ATTRIBUTE_NAME = "tokenRequired"; // Server->client: is a token required to claim an identity?
 
     /** Unique ID generated once at server startup — changes on every restart. */
     private static final String SERVER_RUN_ID = "srv-" + System.currentTimeMillis();
@@ -124,6 +125,23 @@ public final class StateAccessor {
 
     public static Object setUserToken(Object state, String userToken) {
         return setStateAttribute(state, USER_TOKEN_ATTRIBUTE_NAME, userToken, true);
+    }
+
+    /**
+     * Whether this server requires a token to accept an identity — told to the client so it can stop
+     * sending a claim the server would ignore.
+     *
+     * <p>Server to client only, and the client is free to disbelieve it: acting on it makes the client
+     * send LESS, never more, so a wrong value costs a redundant field or a corrected identity, never an
+     * unearned one. That asymmetry is why it can be communicated at all — the reverse direction, a client
+     * telling the server what to require, would be the whole vulnerability restated.
+     */
+    public static Boolean isTokenRequired(Object state) {
+        return (Boolean) getStateAttribute(state, TOKEN_REQUIRED_ATTRIBUTE_NAME);
+    }
+
+    public static Object setTokenRequired(Object state, Boolean tokenRequired, boolean override) {
+        return setStateAttribute(state, TOKEN_REQUIRED_ATTRIBUTE_NAME, tokenRequired, override);
     }
 
     public static String getRunId(Object state) {

@@ -352,6 +352,10 @@ public final class ServerSideStateSessionSyncer {
         }
         // outgoingState.serverRunId <= StateAccessor.getServerRunId() ? ALWAYS (non-override), so client can detect server restarts
         outgoingState = StateAccessor.setServerRunId(outgoingState, StateAccessor.getServerRunId(), false);
+        // outgoingState.tokenRequired <= the flip's state ? ALWAYS (non-override), so a client holding a token can
+        // stop sending a user id this server would only overwrite. Sent every message rather than once because a
+        // client that missed it would silently keep claiming, and the whole point is to remove the claim.
+        outgoingState = StateAccessor.setTokenRequired(outgoingState, IdentityTokenPolicy.isTokenRequired(), false);
         // outgoingState.userId <= serverSession.userId ? NO, we communicate this info only once to the client (when the server code explicitly sets outgoingState.userId)
         // outgoingState.runId <= serverSession.runId ? NEVER (ERASED), because it's always communicated in the opposite way (client => server)
         // outgoingState.backoffice <= serverSession.backoffice ? NEVER (ERASED), because it's always communicated in the opposite way (client => server)

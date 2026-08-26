@@ -61,6 +61,9 @@ public final class ClientSideStateSessionSyncer {
             // AFTER the user id on purpose: a logout arrives as LOGOUT_USER_ID and clears the token above, and doing it
             // in this order means a token riding along in that same message cannot resurrect what the logout cleared.
             clientSideStateSession.changeUserToken(StateAccessor.getUserToken(incomingState), true);
+            // Whether this server still accepts a bare claim. Server to client only — believing it makes us
+            // send less, never more, so a wrong value cannot manufacture an identity.
+            clientSideStateSession.setTokenRequired(StateAccessor.isTokenRequired(incomingState));
             // clientSession.runId <= incomingState.runId ? NEVER, as the server never communicates it (and is not supposed to)
             // The runId is not stored in the client session anyway (as it's a different id on each run)
         }
