@@ -83,6 +83,30 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * <p>Statements are parsed only when the registry's textual pre-filter says a protected name might
      * be involved, so the common write pays one substring scan rather than a parse.
      */
+    /**
+     * The fields a statement SETS, so a policy can distinguish the privileged column from its ordinary
+     * neighbours on the same row. Empty for a delete, which sets nothing — a delete is judged on the
+     * entity alone, and rightly: removing a row disposes of every field on it.
+     *
+     * <p>Only plain {@code field = value} assignments are reported. A computed or otherwise unreadable
+     * left-hand side contributes no name, which means a policy keyed on field names would not match it —
+     * so an entity whose fields are individually protected should also carry an entity-level rule, or a
+     * statement this cannot read would slip past on a technicality.
+     */
+    private static String[] writtenFieldsOf(DqlStatement<Object> dqlStatement) {
+        ExpressionArray<Object> setClause =
+              dqlStatement instanceof Update ? ((Update<Object>) dqlStatement).getSetClause()
+            : dqlStatement instanceof Insert ? ((Insert<Object>) dqlStatement).getSetClause()
+            : null;
+        if (setClause == null)
+            return new String[0];
+        java.util.List<String> names = new java.util.ArrayList<>();
+        for (Expression<?> expression : setClause.getExpressions())
+            if (expression instanceof Equals && ((Equals<?>) expression).getLeft() instanceof DomainField field)
+                names.add(field.getName());
+        return names.toArray(String[]::new);
+    }
+
     private record ProtectedWrite(String entityName, ProtectedEntityWriteRegistry.WriteVerb verb) {}
 
     /** Reported only AFTER the write actually landed: an attempt that failed changed nothing to react to. */
@@ -121,7 +145,7 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         DomainClass resolved = domainClass instanceof DomainClass ? (DomainClass) domainClass
             : dataSourceModel.getDomainModel().getClass(domainClass);
         String entityName = resolved.getName();
-        return ProtectedEntityWriteRegistry.checkWriteAllowed(entityName, verb)
+        return ProtectedEntityWriteRegistry.checkWriteAllowed(entityName, verb, writtenFieldsOf(dqlStatement))
             .map(ignored -> new ProtectedWrite(entityName, verb));
     }
 

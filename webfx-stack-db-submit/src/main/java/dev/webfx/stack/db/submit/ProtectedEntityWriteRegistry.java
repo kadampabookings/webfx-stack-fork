@@ -31,11 +31,16 @@ public final class ProtectedEntityWriteRegistry {
     @FunctionalInterface
     public interface WriteAuthorizer {
         /**
+         * @param writtenFields the fields this statement SETS, empty for a delete. Supplied because a
+         *                      row is not always uniform in what it protects: an account's language is
+         *                      ordinary user data while the flag deciding whether it may reach the back
+         *                      office is not, and they live side by side. Entity granularity alone must
+         *                      either refuse the ordinary write or permit the privileged one.
          * @return a future true if this write may proceed. A future false, or a failure, denies it — the
          *         caller treats anything that is not an explicit yes as no, so an authorizer that throws
          *         or times out withholds the write rather than waving it through.
          */
-        Future<Boolean> isWriteAuthorized(String entityName, WriteVerb verb);
+        Future<Boolean> isWriteAuthorized(String entityName, WriteVerb verb, String[] writtenFields);
     }
 
     /** Told after a protected write has actually happened — see {@link #registerWriteObserver}. */
@@ -115,11 +120,11 @@ public final class ProtectedEntityWriteRegistry {
      * already knows how to surface, and — more to the point — cannot be mistaken for a successful
      * no-op by a code path that forgot to inspect a boolean.
      */
-    public static Future<Void> checkWriteAllowed(String entityName, WriteVerb verb) {
+    public static Future<Void> checkWriteAllowed(String entityName, WriteVerb verb, String[] writtenFields) {
         WriteAuthorizer currentAuthorizer = authorizer;
         if (currentAuthorizer == null)
             return Future.succeededFuture();
-        return currentAuthorizer.isWriteAuthorized(entityName, verb)
+        return currentAuthorizer.isWriteAuthorized(entityName, verb, writtenFields)
             .otherwise(false) // an authorizer that fails denies; it does not abstain
             .compose(authorized -> Boolean.TRUE.equals(authorized)
                 ? Future.succeededFuture()
