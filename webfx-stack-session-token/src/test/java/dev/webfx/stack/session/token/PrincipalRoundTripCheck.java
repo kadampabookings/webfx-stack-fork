@@ -1,5 +1,5 @@
-import dev.webfx.stack.session.token.PrincipalToken;
-import dev.webfx.stack.session.token.SignedToken;
+package dev.webfx.stack.session.token;
+
 import dev.webfx.stack.com.serial.SerialCodecManager;
 import one.modality.crm.shared.services.authn.ModalityUserPrincipal;
 import one.modality.crm.shared.services.authn.serial.ModalityUserPrincipalSerialCodec;
@@ -11,11 +11,11 @@ import java.util.List;
 /**
  * Round-trips real Modality principals through mint and verify.
  *
- * <p>Two of these currently FAIL, on purpose. A principal minted with Integer ids comes back with Byte
- * ids, so it does not equals() itself — see the KNOWN ISSUE on {@link PrincipalToken}. The check is
- * committed failing rather than adjusted to pass, because it is the thing that has to go green before a
- * verified principal may be consumed, and a check quietly weakened to match a bug stops being able to
- * tell anyone when the bug is fixed.
+ * <p>Two of these once failed: a principal minted with Integer ids came back with Byte ids and did not
+ * equals() itself. They pass because the principals were given value equality, NOT because the check was
+ * relaxed to accommodate them. Keep it that way — the "same person and account" and "support agent
+ * preserved" cases are the ones that detect a principal type whose equality is by object identity, and
+ * such a type breaks the authorization cache and the login-transition check without ever failing.
  *
  * <p>No test framework, for the reason recorded in webfx-stack-authz-core: this repository declares no
  * JUnit. Run from main(); it exits non-zero while the issue stands.

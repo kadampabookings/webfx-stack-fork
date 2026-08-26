@@ -19,26 +19,13 @@ import dev.webfx.stack.com.serial.SerialCodecManager;
  * would be a far worse bug than the one this class exists to fix, and it would still pass every test
  * that only checks the happy path.
  *
- * <p><b>KNOWN ISSUE — a verified principal may not {@code equals()} the one that was minted.</b>
- * Serializing to JSON text and parsing it back does not preserve the numeric type of a field: a
- * {@code ModalityUserPrincipal} minted with {@code Integer} ids comes back with {@code Byte} ids for
- * small values, and {@code Integer.equals(Byte)} is false. Measured with both the generic and the Vert.x
- * AST factories. The existing wire path does NOT have this problem, because it passes AST objects rather
- * than text, so this is introduced by signing — which needs something byte-shaped to sign.
- *
- * <p>It matters more than a failing equality usually would. {@code ModalityUserPrincipal}'s own javadoc
- * records that the principal is "the cache key for authorizations and the value the session syncer
- * compares to detect a login transition". A principal that does not equal itself across a round trip
- * therefore means the authorization cache misses every time, and the syncer reads every message as a
- * fresh login — re-running the identity check and re-pushing the grant set on each one. It would not
- * fail; it would just quietly do all of that work forever, which is the kind of thing that is found in
- * production rather than in review.
- *
- * <p>This must be resolved before anything consumes a verified principal. The fix belongs at the layer
- * that owns what identity MEANS, not here: either the principal compares its ids by numeric value rather
- * than by {@code Object.equals}, or its codec decodes them to one canonical type. Choosing between those
- * is a change to a core Modality class with deliberate equality semantics — a support view must not equal
- * the account holder's own session — so it is not made unilaterally from inside a signing utility.
+ * <p>A verified principal equals the one that was minted, which is less obvious than it sounds. Signing
+ * requires text, and a JSON text round trip does not preserve a number's boxed type — ids minted as
+ * {@code Integer} come back as {@code Byte} for small values. That was harmless only because
+ * {@code ModalityUserPrincipal} and {@code ModalityGuestPrincipal} were then given value equality; before
+ * that, a principal did not equal itself across this class, which would have made the authorization cache
+ * miss on every request and the session syncer read every message as a fresh login. If a future principal
+ * type is added, give it value equality too, or it will fail the same way and fail silently.
  *
  * @author Bruno Salmon
  */
