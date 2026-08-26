@@ -168,6 +168,7 @@
         <module>webfx-stack-session-state-client</module>
         <module>webfx-stack-session-state-client-fx</module>
         <module>webfx-stack-session-state-server</module>
+        <module>webfx-stack-session-token</module>
         <module>webfx-stack-session-vertx</module>
         <module>webfx-stack-shareddata</module>
         <module>webfx-stack-shareddata-ast</module>
