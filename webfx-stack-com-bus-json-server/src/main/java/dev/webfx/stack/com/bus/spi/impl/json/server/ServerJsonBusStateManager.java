@@ -38,7 +38,10 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
         if (incoming) {
             if (LOG_RAW_MESSAGES)
                 Console.log(">> Incoming message : " + Json.formatNode(rawJsonMessage));
-            // Mark it as having come from outside. This is the ONLY place a client message can enter, so
+            // Mark it as having come from outside. The mirror of the serverOrigin stamp below, and
+            // deliberately NOT its complement: both are positive assertions, and neither should ever be
+            // derived from the absence of the other — see the note on setOutgoingJsonRawMessageState.
+            // This is the ONLY place a client message can enter, so
             // it is the only place that can say so with authority — and it overwrites rather than
             // defaults, so a caller who sends clientOrigin:false is corrected rather than believed. The
             // asymmetry is the whole value: server-internal work never passes through the bridge and so
@@ -90,6 +93,15 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
     // Use this when writing a state that is leaving the server toward a client. It stamps the
     // serverOrigin marker so the recipient distinguishes authoritative server pushes from
     // peer-to-peer broadcast headers leaked by a publisher.
+    //
+    // NOT the complement of clientOrigin, and deliberately not derived from it. Both are POSITIVE
+    // assertions, which is what makes each safe: a reader trusts only what is affirmed, so a message
+    // carrying neither marker is refused by both rules. Rewriting either as the other's negation would
+    // turn "trust what is affirmed" into "trust what is not denied", and absence is the default state
+    // of the world — the failure mode would move from someone having to lie to someone having to
+    // forget, and forgetting is far commoner. They are also stamped by different components that know
+    // different things, and read by parties with different powers to verify. The symmetry is real; the
+    // equivalence is not.
     public static void setOutgoingJsonRawMessageState(AstObject rawJsonMessage, AstObject headers, Object state) {
         if (state != null)
             StateAccessor.setServerOrigin(state, true);
