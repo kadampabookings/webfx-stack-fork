@@ -70,6 +70,37 @@ public final class ProtectedEntityWriteRegistry {
         void onProtectedWriteSucceeded(String entityName, WriteVerb verb);
     }
 
+    /**
+     * Told when a submit arrives that is NOT DQL, and so will reach the database as written.
+     *
+     * <p>Reported from the framework because only the DQL layer can still tell: it inspects the
+     * statement's language before translating, and afterwards a translated DQL statement and a raw one
+     * are the same thing — a SQL string with no language. Judged by the application because whether a
+     * raw statement matters depends on WHO sent it, which is a question about origin and identity that
+     * this layer has no business knowing.
+     */
+    @FunctionalInterface
+    public interface RawStatementObserver {
+        void onNonDqlSubmit(String language, String statement);
+    }
+
+    private static volatile RawStatementObserver rawStatementObserver;
+
+    public static void registerRawStatementObserver(RawStatementObserver observer) {
+        rawStatementObserver = observer;
+    }
+
+    /** Never throws into the caller: observing a statement must not be able to fail one. */
+    public static void notifyNonDqlSubmit(String language, String statement) {
+        RawStatementObserver observer = rawStatementObserver;
+        if (observer != null) {
+            try {
+                observer.onNonDqlSubmit(language, statement);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
     private static volatile WriteAuthorizer authorizer;
     private static volatile WriteObserver observer;
     /** Lower-cased, so the pre-filter below can match a statement whatever case it was written in. */

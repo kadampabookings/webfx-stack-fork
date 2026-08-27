@@ -47,7 +47,22 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
                 });
     }
 
+    /**
+     * Reports a submit that will not be translated, and so reaches the database exactly as written.
+     *
+     * <p>Called here because this is the last moment the distinction exists. Translation replaces the
+     * statement and clears the language, so downstream a translated DQL statement and a hand-written SQL
+     * one are indistinguishable — which is precisely why a raw statement has been able to travel this
+     * far unexamined.
+     */
+    private static void reportIfNotDql(SubmitArgument argument) {
+        String language = argument.getLanguage();
+        if (language == null || !"DQL".equalsIgnoreCase(language))
+            ProtectedEntityWriteRegistry.notifyNonDqlSubmit(language, argument.getStatement());
+    }
+
     private static Future<SubmitResult> interceptAndExecuteSubmit(SubmitArgument argument, SubmitServiceProvider targetProvider) {
+        reportIfNotDql(argument);
         return authorizeIfProtected(argument)
             .compose(protectedWrite -> targetProvider.executeSubmit(translateSubmit(argument))
                 .onSuccess(ignored -> reportIfProtected(protectedWrite)));
@@ -59,6 +74,8 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         // caller may not do — and checking only the first would make "hide it behind a legitimate write"
         // the obvious way through.
         java.util.List<ProtectedWrite> protectedWrites = new java.util.ArrayList<>();
+        for (SubmitArgument argument : batch.getArray())
+            reportIfNotDql(argument);
         Future<Void> authorized = Future.succeededFuture();
         for (SubmitArgument argument : batch.getArray())
             authorized = authorized.compose(ignored -> authorizeIfProtected(argument)

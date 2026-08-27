@@ -29,6 +29,7 @@ public final class StateAccessor {
     private final static String SERVER_RUN_ID_ATTRIBUTE_NAME = "serverRunId";
     // Stamped on every server-emitted state envelope; clients drop any envelope without it.
     private final static String SERVER_ORIGIN_ATTRIBUTE_NAME = "serverOrigin";
+    private final static String CLIENT_ORIGIN_ATTRIBUTE_NAME = "clientOrigin"; // Stamped by the bridge on everything arriving from outside
     private final static String TOKEN_REQUIRED_ATTRIBUTE_NAME = "tokenRequired"; // Server->client: is a token required to claim an identity?
 
     /** Unique ID generated once at server startup — changes on every restart. */
@@ -223,6 +224,27 @@ public final class StateAccessor {
 
     public static Object setServerOrigin(Object state, Boolean serverOrigin, boolean override) {
         return setStateAttribute(state, SERVER_ORIGIN_ATTRIBUTE_NAME, serverOrigin, override);
+    }
+
+    /**
+     * Whether this call entered from outside — stamped by the SockJS bridge, never by a caller.
+     *
+     * <p>The mirror of {@link #isServerOrigin}, and trustworthy for the same reason read backwards. The
+     * bridge is the one place a client message can enter, it sets this on every inbound frame, and it
+     * OVERWRITES whatever arrived — so a caller sending {@code clientOrigin: false} is simply corrected.
+     * Server-internal work never passes through the bridge and so never carries the stamp, which is what
+     * lets a rule say "clients may not do this" while server code still can.
+     *
+     * <p>Absent means not-from-a-client, and that direction is deliberate: the stamp is applied by the
+     * component that KNOWS, so its absence is evidence rather than ignorance. Note the scope, though —
+     * this covers bus traffic. An HTTP endpoint is a different door and carries no stamp at all.
+     */
+    public static boolean isClientOrigin(Object state) {
+        return Boolean.TRUE.equals(getStateAttribute(state, CLIENT_ORIGIN_ATTRIBUTE_NAME));
+    }
+
+    public static Object setClientOrigin(Object state, Boolean clientOrigin) {
+        return setStateAttribute(state, CLIENT_ORIGIN_ATTRIBUTE_NAME, clientOrigin, true);
     }
 
     private static Object getStateAttribute(Object state, String name) {

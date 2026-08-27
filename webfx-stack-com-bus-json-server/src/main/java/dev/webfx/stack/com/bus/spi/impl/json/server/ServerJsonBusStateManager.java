@@ -38,6 +38,17 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
         if (incoming) {
             if (LOG_RAW_MESSAGES)
                 Console.log(">> Incoming message : " + Json.formatNode(rawJsonMessage));
+            // Mark it as having come from outside. This is the ONLY place a client message can enter, so
+            // it is the only place that can say so with authority — and it overwrites rather than
+            // defaults, so a caller who sends clientOrigin:false is corrected rather than believed. The
+            // asymmetry is the whole value: server-internal work never passes through the bridge and so
+            // never carries the stamp, which is what lets a rule distinguish "a client asked for this"
+            // from "the server did it", something no endpoint downstream can tell for itself.
+            //
+            // Stamped BEFORE the session sync so everything past this point, including the sync's own
+            // decisions, sees it. A message that arrived with no state at all gets one created here: the
+            // absence of a state header must not be a way to arrive unstamped.
+            originalState = StateAccessor.setClientOrigin(originalState, true);
             // We sync the application serverSession with the incoming state. This is at this point that the serverSession
             // switch can happen if requested by the client, in which case a different serverSession will be returned.
             return ServerSideStateSessionSyncer.syncIncomingState(serverSession, originalState)
