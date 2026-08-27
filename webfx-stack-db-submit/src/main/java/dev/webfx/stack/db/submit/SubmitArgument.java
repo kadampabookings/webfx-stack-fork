@@ -1,6 +1,5 @@
 package dev.webfx.stack.db.submit;
 
-import dev.webfx.platform.util.Arrays;
 import dev.webfx.stack.db.datascope.DataScope;
 
 /**
@@ -103,9 +102,22 @@ public final class SubmitArgument {
         return transactionPreamble;
     }
 
+    /**
+     * Describes a bind-parameter array by its size, never its contents. Mirrors the helper of the
+     * same name on QueryArgument; the two are separate because their modules do not share one.
+     * See that copy for why a count rather than a sample.
+     */
+    private static String describeParameters(Object[] parameters) {
+        if (parameters == null)
+            return "null";
+        return parameters.length + (parameters.length == 1 ? " value" : " values");
+    }
+
     @Override
     public String toString() {
-        return "SubmitArgument('" + statement + (parameters == null ? "'" : "', " + Arrays.toString(parameters)) + ')';
+        // Bind values are not rendered - see describeParameters. A submit's values are the rows
+        // being written, which for a booking includes the guest's own free text.
+        return "SubmitArgument('" + statement + (parameters == null ? "'" : "', " + describeParameters(parameters)) + ')';
     }
 
     public static SubmitArgumentBuilder builder() {

@@ -83,7 +83,11 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
                             });
                     }
                 } catch (Exception e) {
-                    Exception ex = new IllegalArgumentException("Error while translating DQL query to SQL: " + e.getMessage() + "\nDQL query:\n" + statement + "\nParameters: " + Arrays.toString(argument.getParameters())+ "\nParameter names: " + Arrays.toString(argument.getParameterNames()));
+                    // This message is BOTH logged and returned to the caller (failedFuture below), so
+                    // the bind values must not be in it: a count, never the contents. The statement and
+                    // the parameter NAMES stay - they are what a translation failure is diagnosed from,
+                    // and they are metadata rather than anyone's data.
+                    Exception ex = new IllegalArgumentException("Error while translating DQL query to SQL: " + e.getMessage() + "\nDQL query:\n" + statement + "\nParameters: " + QueryArgument.describeParameters(argument.getParameters())+ "\nParameter names: " + Arrays.toString(argument.getParameterNames()));
                     Console.error(ex);
                     return Future.failedFuture(ex);
                 }

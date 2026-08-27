@@ -177,13 +177,32 @@ public final class QueryArgument {
         return result;
     }
 
+    /**
+     * Describes a bind-parameter array by its size, never its contents.
+     *
+     * <p>Deliberately returns no sample and no types: a "first value" or a type list is still the
+     * caller's data, and the point of a count is that it can be logged anywhere without thought.
+     * Diagnosis keeps what it actually needs - the statement, the parameter names, and how many
+     * values were supplied.
+     */
+    public static String describeParameters(Object[] parameters) {
+        if (parameters == null)
+            return "null";
+        return parameters.length + (parameters.length == 1 ? " value" : " values");
+    }
+
     @Override
     public String toString() {
         return "QueryArgument{" +
                "dataSourceId=" + dataSourceId +
                ", language='" + language + '\'' +
                ", statement='" + statement + '\'' +
-               ", parameters=" + Arrays.toString(parameters) +
+               // Bind values are the application's data - for a booking query, names, email
+               // addresses and free-text health notes. They are NOT rendered here: this toString()
+               // is interpolated into log lines and error messages all over the stack, so printing
+               // them here puts personal data wherever any of those end up. Count only. Parameter
+               // NAMES are metadata, not values, so they stay.
+               ", parameters=" + describeParameters(parameters) +
                ", parameterNames=" + Arrays.toString(parameterNames) +
                '}';
     }

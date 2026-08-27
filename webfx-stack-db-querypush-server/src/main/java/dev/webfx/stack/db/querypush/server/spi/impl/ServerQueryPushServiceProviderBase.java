@@ -41,7 +41,6 @@ import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -150,7 +149,12 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                     }
                 }
                 Object[] parameters = queryInfo.queryArgument.getParameters();
-                String parametersDisplay = parameters == null || parameters.length == 0 ? null : Arrays.toString(parameters);
+                // This snapshot is served to any signed-in caller, so it must not carry the values:
+                // it would hand one account the search terms of every other. A count is enough to see
+                // that a stream is parameterised, which is what the monitor is for. The truncation
+                // below is kept for the case where a count string is somehow long, and because
+                // removing a guard is not this change's job.
+                String parametersDisplay = parameters == null || parameters.length == 0 ? null : QueryArgument.describeParameters(parameters);
                 if (parametersDisplay != null && parametersDisplay.length() > MONITOR_PARAMETERS_MAX_LENGTH)
                     parametersDisplay = parametersDisplay.substring(0, MONITOR_PARAMETERS_MAX_LENGTH) + "…";
                 queryStreams.add(new QueryStreamMonitorInfo(

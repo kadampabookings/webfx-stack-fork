@@ -255,7 +255,9 @@ public class VertxLocalPostgresQuerySubmitServiceProvider implements QueryServic
         if (!registry.claimIfArmed(statement, System.currentTimeMillis()))
             return;
         Object[] parameters = argument.getParameters();
-        String parametersDisplay = parameters == null || parameters.length == 0 ? null : java.util.Arrays.toString(parameters);
+        // Captured and shown to whoever reads the analyze results, which records the parameters of
+        // whoever ran the statement next - so the values here are somebody else's data. Count only.
+        String parametersDisplay = parameters == null || parameters.length == 0 ? null : QueryArgument.describeParameters(parameters);
         // The original DQL this SQL was compiled from (server-side only, via the transient
         // original-argument chain the DQL interceptor sets); null when the query wasn't DQL-derived.
         String dql = dqlStatementOf(argument);
