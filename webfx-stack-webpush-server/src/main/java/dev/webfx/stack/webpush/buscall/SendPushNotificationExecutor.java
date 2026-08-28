@@ -4,6 +4,7 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.platform.console.Console;
 import dev.webfx.platform.service.SingleServiceProvider;
 import dev.webfx.stack.authn.AuthenticationService;
+import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import dev.webfx.stack.webpush.WebPushPayload;
 import dev.webfx.stack.webpush.WebPushResult;
@@ -45,6 +46,13 @@ final class SendPushNotificationExecutor {
     static Future<SendPushNotificationResult> execute(SendPushNotificationArgument arg) {
         if (ThreadLocalStateHolder.getUserId() == null) {
             return Future.failedFuture("Not authenticated");
+        }
+        // A read-only session (a support member borrowing another user's view) must not be able to
+        // broadcast notifications to real devices. Sending never touches the SQL submit layer where
+        // read-only is otherwise enforced, so this endpoint has to refuse for itself — checked here,
+        // synchronously, while the thread-local still holds the principal.
+        if (RestrictedPrincipalRegistry.isCurrentUserRestricted()) {
+            return Future.failedFuture("[ReadOnlySessionError] This session is not allowed to send notifications");
         }
         return AuthenticationService.getUserClaims()
                 .compose(claims -> runForCaller(arg, claims == null ? null : claims.email()));

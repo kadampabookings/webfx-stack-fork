@@ -38,6 +38,7 @@ import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.push.server.PushClientMetadata;
 import dev.webfx.stack.push.server.PushServerService;
 import dev.webfx.stack.session.state.LogoutUserId;
+import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
 import java.util.ArrayList;
@@ -519,6 +520,22 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         return result;
     }
 
+    /**
+     * Whether the caller on this thread is a read-only session (e.g. a support member borrowing
+     * another user's view). The monitor MUTATORS below refuse such callers: cancelling queries,
+     * arming EXPLAIN ANALYZE or resetting counters are state changes that never pass the SQL submit
+     * layer where read-only is otherwise enforced, so each mutator has to refuse for itself. The
+     * read-only snapshots (getMonitorInfo &amp; co) deliberately keep serving them. Only valid in the
+     * synchronous part of a call, which is where all four mutators run in full.
+     */
+    private static boolean isRestrictedCaller(String mutatorName) {
+        if (RestrictedPrincipalRegistry.isCurrentUserRestricted()) {
+            Console.log("[Monitor] " + mutatorName + " denied — read-only session");
+            return true;
+        }
+        return false;
+    }
+
     @Override
     public Boolean cancelSqlQuery(long monitorId) {
         // Same gate as getMonitorInfo: cancelling a running query is an admin action reserved for
@@ -529,6 +546,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             Console.log("[Monitor] cancelSqlQuery denied — no logged-in caller (userId=" + callerUserId + ")");
             return null;
         }
+        if (isRestrictedCaller("cancelSqlQuery"))
+            return null;
         boolean dispatched = SqlExecutionMonitor.get().cancel(monitorId);
         Console.log("[Monitor] cancelSqlQuery id=" + monitorId + " → "
             + (dispatched ? "cancel dispatched" : "not found / already finished"));
@@ -543,6 +562,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             Console.log("[Monitor] armSqlAnalyze denied — no logged-in caller (userId=" + callerUserId + ")");
             return null;
         }
+        if (isRestrictedCaller("armSqlAnalyze"))
+            return null;
         // Only arm statements the server actually runs as reads — never arbitrary client SQL, and
         // never a write (EXPLAIN ANALYZE would execute it).
         if (!SqlExecutionMonitor.get().isKnownReadStatement(statement)) {
@@ -569,6 +590,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         Object callerUserId = ThreadLocalStateHolder.getUserId();
         if (LogoutUserId.isLogoutUserIdOrNull(callerUserId))
             return null;
+        if (isRestrictedCaller("resetSqlAnalyze"))
+            return null;
         SqlAnalyzeRegistry.get().remove(statement);
         return true;
     }
@@ -581,6 +604,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             Console.log("[Monitor] resetSqlMonitor denied — no logged-in caller (userId=" + callerUserId + ")");
             return null;
         }
+        if (isRestrictedCaller("resetSqlMonitor"))
+            return null;
         SqlExecutionMonitor.get().reset();
         CompressionMetrics.reset();
         SqlAnalyzeRegistry.get().clearAll(); // fresh window drops every pending/captured analyze arm

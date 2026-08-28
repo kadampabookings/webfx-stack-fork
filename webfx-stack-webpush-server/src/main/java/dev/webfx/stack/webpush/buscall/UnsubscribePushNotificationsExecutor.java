@@ -4,6 +4,7 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.platform.console.Console;
 import dev.webfx.platform.service.SingleServiceProvider;
 import dev.webfx.stack.authn.AuthenticationService;
+import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import dev.webfx.stack.webpush.spi.WebPushSubscriptionStore;
 
@@ -37,6 +38,14 @@ final class UnsubscribePushNotificationsExecutor {
             UnsubscribePushNotificationsArgument arg) {
         boolean authenticated = ThreadLocalStateHolder.getUserId() != null;
         if (authenticated) {
+            // A read-only session must not unsubscribe the borrowed account's devices: its claims
+            // email is the TARGET's, so the write below would land on someone else's subscriptions.
+            // The store update never passes the SQL submit layer's read-only gate, so refuse here,
+            // synchronously, while the thread-local still holds the principal. The anonymous path
+            // below is untouched — it carries no principal to be restricted.
+            if (RestrictedPrincipalRegistry.isCurrentUserRestricted()) {
+                return Future.failedFuture("[ReadOnlySessionError] This session is not allowed to change subscriptions");
+            }
             // Use the auth-claim email, ignoring whatever the client passed.
             return AuthenticationService.getUserClaims()
                     .compose(claims -> {
