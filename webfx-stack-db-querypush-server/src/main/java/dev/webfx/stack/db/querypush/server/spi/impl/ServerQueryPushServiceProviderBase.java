@@ -339,7 +339,14 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         "select (select setting::int from pg_settings where name='max_connections') as max_conn," +
         " count(*) filter (where backend_type = 'client backend')::int as total," +
         " count(*) filter (where backend_type = 'client backend' and state='active')::int as active," +
-        " count(*) filter (where backend_type = 'client backend' and state='idle')::int as idle" +
+        " count(*) filter (where backend_type = 'client backend' and state='idle')::int as idle," +
+        // Client backends whose state reads NULL: Postgres blanks state/query/query_start for
+        // sessions belonging to roles this one cannot inspect (not a superuser, not a member of
+        // pg_read_all_stats / pg_monitor). Those are exactly the rows DB_ACTIVE_QUERIES_SQL drops on
+        // "state is not null", so without this the drill-down silently shows only our OWN backends
+        // while claiming to cover all clients. Counting them turns an invisible blind spot into a
+        // visible one: a non-zero value means "there are N backends here whose queries I cannot see".
+        " count(*) filter (where backend_type = 'client backend' and state is null)::int as not_inspectable" +
         " from pg_stat_activity";
 
     // Non-idle backends (long-running / blocking) across all clients, worst-first, capped. Excludes
@@ -378,8 +385,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
     // Column indices, in SELECT order — a raw-SQL QueryResult carries values but no columnNames, so
     // we read by position, not by name.
-    // DB_CONNECTIONS_SQL: max_conn, total, active, idle
-    private static final int CONN_MAX = 0, CONN_TOTAL = 1, CONN_ACTIVE = 2, CONN_IDLE = 3;
+    // DB_CONNECTIONS_SQL: max_conn, total, active, idle, not_inspectable
+    private static final int CONN_MAX = 0, CONN_TOTAL = 1, CONN_ACTIVE = 2, CONN_IDLE = 3, CONN_NOT_INSPECTABLE = 4;
     // DB_ACTIVE_QUERIES_SQL: pid, duration_ms, state, wait, blocked_by, query
     private static final int Q_PID = 0, Q_DURATION = 1, Q_STATE = 2, Q_WAIT = 3, Q_BLOCKED_BY = 4, Q_QUERY = 5;
 
@@ -389,6 +396,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         int total = hasConn ? connections.getInt(0, CONN_TOTAL, 0) : 0;
         int active = hasConn ? connections.getInt(0, CONN_ACTIVE, 0) : 0;
         int idle = hasConn ? connections.getInt(0, CONN_IDLE, 0) : 0;
+        int notInspectable = hasConn ? connections.getInt(0, CONN_NOT_INSPECTABLE, 0) : 0;
         int rows = activity == null ? 0 : activity.getRowCount();
         ActiveDbQueryInfo[] queries = new ActiveDbQueryInfo[rows];
         for (int r = 0; r < rows; r++) {
@@ -400,7 +408,7 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                 activity.getInt(r, Q_BLOCKED_BY, 0),
                 stringOf(activity.getValue(r, Q_QUERY)));
         }
-        return new DatabaseHealthMonitorInfo(maxConn, total, active, idle, queries);
+        return new DatabaseHealthMonitorInfo(maxConn, total, active, idle, notInspectable, queries);
     }
 
     /** Null-safe toString for a raw QueryResult cell (text columns come back as String, but be defensive). */
