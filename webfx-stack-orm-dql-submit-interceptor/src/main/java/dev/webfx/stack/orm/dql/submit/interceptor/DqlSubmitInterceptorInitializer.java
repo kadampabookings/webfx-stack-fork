@@ -23,7 +23,9 @@ import dev.webfx.stack.orm.domainmodel.DomainField;
 import dev.webfx.stack.orm.expression.Expression;
 import dev.webfx.stack.orm.expression.terms.*;
 
+import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 /**
  * @author Bruno Salmon
@@ -73,19 +75,22 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         // one unauthorized statement anywhere in it is enough to make the whole thing something this
         // caller may not do — and checking only the first would make "hide it behind a legitimate write"
         // the obvious way through.
-        java.util.List<ProtectedWrite> protectedWrites = new java.util.ArrayList<>();
         for (SubmitArgument argument : batch.getArray())
             reportIfNotDql(argument);
-        Future<Void> authorized = Future.succeededFuture();
+        // Every statement is authorized, and all of them are STARTED HERE, synchronously, before any
+        // future completes. Chaining them with compose() ran statements 2..n inside async callbacks,
+        // where the caller's identity is no longer readable — so the first statement of a batch was
+        // judged as the user and the rest as nobody. The authorizer fails closed, which turned that
+        // into refusals rather than a silent hole, but it refused legitimate work either way.
+        List<Future<ProtectedWrite>> authorizations = new ArrayList<>();
         for (SubmitArgument argument : batch.getArray())
-            authorized = authorized.compose(ignored -> authorizeIfProtected(argument)
-                .map(protectedWrite -> {
-                    if (protectedWrite != null)
-                        protectedWrites.add(protectedWrite);
-                    return null;
+            authorizations.add(authorizeIfProtected(argument));
+        return Future.all(new ArrayList<>(authorizations))
+            .compose(ignored -> targetProvider.executeSubmitBatch(translateBatch(batch))
+                .onSuccess(result -> {
+                    for (Future<ProtectedWrite> authorization : authorizations)
+                        reportIfProtected(authorization.result());
                 }));
-        return authorized.compose(ignored -> targetProvider.executeSubmitBatch(translateBatch(batch))
-            .onSuccess(result -> protectedWrites.forEach(DqlSubmitInterceptorInitializer::reportIfProtected)));
     }
 
     /**
