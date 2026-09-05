@@ -14,6 +14,7 @@ public final class DatabaseHealthMonitorInfoSerialCodec extends SerialCodecBase<
     private static final String ACTIVE_CONNECTIONS_KEY = "activeConnections";
     private static final String IDLE_CONNECTIONS_KEY = "idleConnections";
     private static final String NOT_INSPECTABLE_CONNECTIONS_KEY = "notInspectableConnections";
+    private static final String SELF_CONNECTIONS_KEY = "selfConnections";
     private static final String ACTIVE_QUERIES_KEY = "activeQueries";
 
     public DatabaseHealthMonitorInfoSerialCodec() {
@@ -27,6 +28,7 @@ public final class DatabaseHealthMonitorInfoSerialCodec extends SerialCodecBase<
         encodeInteger(serial, ACTIVE_CONNECTIONS_KEY, arg.getActiveConnections());
         encodeInteger(serial, IDLE_CONNECTIONS_KEY,   arg.getIdleConnections());
         encodeInteger(serial, NOT_INSPECTABLE_CONNECTIONS_KEY, arg.getNotInspectableConnections());
+        encodeInteger(serial, SELF_CONNECTIONS_KEY,   arg.getSelfConnections());
         encodeArray(  serial, ACTIVE_QUERIES_KEY,     arg.getActiveQueries());
     }
 
@@ -40,6 +42,9 @@ public final class DatabaseHealthMonitorInfoSerialCodec extends SerialCodecBase<
             // Defaults to 0, so a client on this build still decodes a snapshot from an
             // older server (which sends no such key) instead of failing.
             decodeInteger(serial, NOT_INSPECTABLE_CONNECTIONS_KEY, 0),
+            // Same reason: an older server sends no self count, and 0 reads as "none reported"
+            // rather than breaking the decode.
+            decodeInteger(serial, SELF_CONNECTIONS_KEY, 0),
             decodeArray(  serial, ACTIVE_QUERIES_KEY, ActiveDbQueryInfo.class));
     }
 }

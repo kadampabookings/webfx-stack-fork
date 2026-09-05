@@ -330,38 +330,71 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
 
     // ---- Database health (on-demand; queries pg_stat_activity, kept off the regular monitor poll) ----
 
-    // Connection counts + max_connections in one row. Counts only CLIENT backends — Postgres's own
-    // background/auxiliary processes (autovacuum launcher, bgwriter, checkpointer, walwriter, …) have
-    // a NULL state and don't count against max_connections, so excluding them makes total meaningful
-    // (vs max_connections) and lets the client sum active + idle + other = total. "other" (client
-    // backends in states like "idle in transaction") is derived on the client as total − active − idle.
-    private static final String DB_CONNECTIONS_SQL =
-        "select (select setting::int from pg_settings where name='max_connections') as max_conn," +
-        " count(*) filter (where backend_type = 'client backend')::int as total," +
-        " count(*) filter (where backend_type = 'client backend' and state='active')::int as active," +
-        " count(*) filter (where backend_type = 'client backend' and state='idle')::int as idle," +
+    // ONE statement, not two. The counts and the query list used to be two statements, and
+    // QueryService runs a batch through executeParallel — two pooled connections, each seeing the
+    // other as an active backend. The card then read "2 active" while the list, excluding only its
+    // own pid, showed a single row: this monitoring query. Asking once fixes that at the root — one
+    // backend to discount (pg_backend_pid()), and one sample, so the counts and the rows can never
+    // disagree about the same instant. The two halves share a `snapshot` CTE, referenced twice and
+    // therefore materialised, so even within this statement pg_stat_activity is read once; it is a
+    // shared-memory view, not an MVCC table, so a second scan could otherwise see a later reality.
+    //
+    // Shape: the counts are one row, the busy backends are 0..50 rows, and a LEFT JOIN ON TRUE pairs
+    // them — every row carries the same counts, and an idle database still yields one row with the
+    // query columns NULL. See the column indices below for how it is read back.
+    //
+    // What is deliberately NOT excluded: another server task's or another admin's health query. That
+    // is somebody else's work on this database, and it stays visible in both the counts and the list.
+    private static final String DB_HEALTH_SQL =
+        "with snapshot as (" +
+        "  select pid, backend_type, state, query, query_start, wait_event_type from pg_stat_activity" +
+        ")," +
+        // Connection counts + max_connections in one row. Counts only CLIENT backends — Postgres's own
+        // background/auxiliary processes (autovacuum launcher, bgwriter, checkpointer, walwriter, …)
+        // have a NULL state and don't count against max_connections, so excluding them makes total
+        // meaningful (vs max_connections) and lets the client sum active + idle + other +
+        // not_inspectable + self = total. "other" (client backends in states like "idle in
+        // transaction") is the one bucket with no column of its own: the client derives it by
+        // subtracting the other four from total.
+        " counts as (" +
+        "  select (select setting::int from pg_settings where name='max_connections') as max_conn," +
+        "   count(*) filter (where backend_type = 'client backend')::int as total," +
+        // "active" means real CLIENT work, so this snapshot's own backend — active only because we
+        // asked — is counted apart (self, below) rather than making an idle database read as busy.
+        "   count(*) filter (where backend_type = 'client backend' and state = 'active' and pid <> pg_backend_pid())::int as active," +
+        "   count(*) filter (where backend_type = 'client backend' and state = 'idle')::int as idle," +
         // Client backends whose state reads NULL: Postgres blanks state/query/query_start for
         // sessions belonging to roles this one cannot inspect (not a superuser, not a member of
-        // pg_read_all_stats / pg_monitor). Those are exactly the rows DB_ACTIVE_QUERIES_SQL drops on
+        // pg_read_all_stats / pg_monitor). Those are exactly the rows the busy list drops on
         // "state is not null", so without this the drill-down silently shows only our OWN backends
         // while claiming to cover all clients. Counting them turns an invisible blind spot into a
         // visible one: a non-zero value means "there are N backends here whose queries I cannot see".
-        " count(*) filter (where backend_type = 'client backend' and state is null)::int as not_inspectable" +
-        " from pg_stat_activity";
-
-    // Non-idle backends (long-running / blocking) across all clients, worst-first, capped. Excludes
-    // this monitoring query itself (pg_backend_pid).
-    private static final String DB_ACTIVE_QUERIES_SQL =
-        "select pid," +
-        " (extract(epoch from (now() - query_start)) * 1000)::bigint as duration_ms," +
-        " state," +
-        " wait_event_type as wait," +
-        " coalesce((pg_blocking_pids(pid))[1], 0) as blocked_by," +
-        " left(query, 500) as query" +
-        " from pg_stat_activity" +
-        " where state is not null and state <> 'idle' and pid <> pg_backend_pid()" +
-        " order by duration_ms desc nulls last" +
-        " limit 50";
+        "   count(*) filter (where backend_type = 'client backend' and state is null)::int as not_inspectable," +
+        // This snapshot's own connection — the one row the busy list drops. Counted rather than
+        // silently subtracted, so the client's derived "other" bucket stays what it claims to be
+        // (idle-in-transaction and friends) and active + idle + other + not_inspectable + self still
+        // equals total. Left IN total on purpose: it is a real connection holding a real slot against
+        // max_connections, which is what the card's total measures.
+        "   count(*) filter (where backend_type = 'client backend' and pid = pg_backend_pid())::int as self" +
+        "  from snapshot" +
+        ")," +
+        // Non-idle backends (long-running / blocking) across all clients, worst-first, capped.
+        " busy as (" +
+        "  select pid," +
+        "   (extract(epoch from (now() - query_start)) * 1000)::bigint as duration_ms," +
+        "   state," +
+        "   wait_event_type as wait," +
+        "   coalesce((pg_blocking_pids(pid))[1], 0) as blocked_by," +
+        "   left(query, 500) as query" +
+        "  from snapshot" +
+        "  where state is not null and state <> 'idle' and pid <> pg_backend_pid()" +
+        "  order by duration_ms desc nulls last" +
+        "  limit 50" +
+        ")" +
+        " select counts.max_conn, counts.total, counts.active, counts.idle, counts.not_inspectable, counts.self," +
+        "  busy.pid, busy.duration_ms, busy.state, busy.wait, busy.blocked_by, busy.query" +
+        " from counts left join busy on true" +
+        " order by busy.duration_ms desc nulls last";
 
     @Override
     public Future<DatabaseHealthMonitorInfo> getDatabaseHealthInfo() {
@@ -372,10 +405,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             return Future.failedFuture(new IllegalStateException("Database health info is not available"));
         }
         Object dataSourceId = DataSourceModelService.getDefaultDataSourceId();
-        Future<QueryResult> connectionsFuture = QueryService.executeQuery(rawSqlQuery(dataSourceId, DB_CONNECTIONS_SQL));
-        Future<QueryResult> activityFuture = QueryService.executeQuery(rawSqlQuery(dataSourceId, DB_ACTIVE_QUERIES_SQL));
-        return Future.all(connectionsFuture, activityFuture)
-            .map(cf -> buildDatabaseHealthInfo(cf.resultAt(0), cf.resultAt(1)));
+        return QueryService.executeQuery(rawSqlQuery(dataSourceId, DB_HEALTH_SQL))
+            .map(ServerQueryPushServiceProviderBase::buildDatabaseHealthInfo);
     }
 
     /** A raw-SQL read query: language is null (not "DQL") so it bypasses DQL compilation; sendMetadata=true so columns come back by name. */
@@ -384,31 +415,35 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     }
 
     // Column indices, in SELECT order — a raw-SQL QueryResult carries values but no columnNames, so
-    // we read by position, not by name.
-    // DB_CONNECTIONS_SQL: max_conn, total, active, idle, not_inspectable
-    private static final int CONN_MAX = 0, CONN_TOTAL = 1, CONN_ACTIVE = 2, CONN_IDLE = 3, CONN_NOT_INSPECTABLE = 4;
-    // DB_ACTIVE_QUERIES_SQL: pid, duration_ms, state, wait, blocked_by, query
-    private static final int Q_PID = 0, Q_DURATION = 1, Q_STATE = 2, Q_WAIT = 3, Q_BLOCKED_BY = 4, Q_QUERY = 5;
+    // we read by position, not by name. Every row repeats the counts; the query columns are NULL on
+    // the single row an idle database returns (the LEFT JOIN's unmatched side).
+    private static final int H_MAX = 0, H_TOTAL = 1, H_ACTIVE = 2, H_IDLE = 3, H_NOT_INSPECTABLE = 4, H_SELF = 5,
+        H_PID = 6, H_DURATION = 7, H_STATE = 8, H_WAIT = 9, H_BLOCKED_BY = 10, H_QUERY = 11;
 
-    private static DatabaseHealthMonitorInfo buildDatabaseHealthInfo(QueryResult connections, QueryResult activity) {
-        boolean hasConn = connections != null && connections.getRowCount() > 0;
-        int maxConn = hasConn ? connections.getInt(0, CONN_MAX, -1) : -1;
-        int total = hasConn ? connections.getInt(0, CONN_TOTAL, 0) : 0;
-        int active = hasConn ? connections.getInt(0, CONN_ACTIVE, 0) : 0;
-        int idle = hasConn ? connections.getInt(0, CONN_IDLE, 0) : 0;
-        int notInspectable = hasConn ? connections.getInt(0, CONN_NOT_INSPECTABLE, 0) : 0;
-        int rows = activity == null ? 0 : activity.getRowCount();
-        ActiveDbQueryInfo[] queries = new ActiveDbQueryInfo[rows];
-        for (int r = 0; r < rows; r++) {
-            queries[r] = new ActiveDbQueryInfo(
-                activity.getInt(r, Q_PID, 0),
-                Numbers.longValue(activity.getValue(r, Q_DURATION)),
-                stringOf(activity.getValue(r, Q_STATE)),
-                stringOf(activity.getValue(r, Q_WAIT)),
-                activity.getInt(r, Q_BLOCKED_BY, 0),
-                stringOf(activity.getValue(r, Q_QUERY)));
+    private static DatabaseHealthMonitorInfo buildDatabaseHealthInfo(QueryResult result) {
+        int rowCount = result == null ? 0 : result.getRowCount();
+        if (rowCount == 0) // the LEFT JOIN always yields at least one row, so this means the query failed to shape
+            return new DatabaseHealthMonitorInfo(-1, 0, 0, 0, 0, 0, new ActiveDbQueryInfo[0]);
+        List<ActiveDbQueryInfo> queries = new ArrayList<>(rowCount);
+        for (int r = 0; r < rowCount; r++) {
+            if (result.getValue(r, H_PID) == null) // no busy backend on this row: counts only
+                continue;
+            queries.add(new ActiveDbQueryInfo(
+                result.getInt(r, H_PID, 0),
+                Numbers.longValue(result.getValue(r, H_DURATION)),
+                stringOf(result.getValue(r, H_STATE)),
+                stringOf(result.getValue(r, H_WAIT)),
+                result.getInt(r, H_BLOCKED_BY, 0),
+                stringOf(result.getValue(r, H_QUERY))));
         }
-        return new DatabaseHealthMonitorInfo(maxConn, total, active, idle, notInspectable, queries);
+        return new DatabaseHealthMonitorInfo(
+            result.getInt(0, H_MAX, -1),
+            result.getInt(0, H_TOTAL, 0),
+            result.getInt(0, H_ACTIVE, 0),
+            result.getInt(0, H_IDLE, 0),
+            result.getInt(0, H_NOT_INSPECTABLE, 0),
+            result.getInt(0, H_SELF, 0),
+            queries.toArray(new ActiveDbQueryInfo[0]));
     }
 
     /** Null-safe toString for a raw QueryResult cell (text columns come back as String, but be defensive). */
