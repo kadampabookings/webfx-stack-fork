@@ -341,6 +341,7 @@ public final class ServerSideStateSessionSyncer {
         // not, and for why being lossy costs nothing: this makes revocation PROMPT, and the renewal check
         // below is what makes it CERTAIN.
         if (RevokedFamilies.isRevoked(identity.familyId())) {
+            RevokedFamilies.countRefusal(); // counted every time; reported once per family, just below
             // Once per family, not once per message: a client that does not act on the logout — a
             // background tab, the media heartbeat, a reconnect loop — presents the same dead token every
             // time, and after a bulk revocation that is a line per message per client, drowning the log

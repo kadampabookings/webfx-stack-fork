@@ -23,6 +23,8 @@ import dev.webfx.stack.db.querypush.PulseArgument;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
 import dev.webfx.stack.db.querypush.NameCountInfo;
 import dev.webfx.stack.db.querypush.QueryPushMonitorInfo;
+import dev.webfx.stack.db.querypush.SessionSecurityMonitorInfo;
+import dev.webfx.stack.db.querypush.SessionSecurityMonitorRegistry;
 import dev.webfx.stack.db.querypush.QueryPushResult;
 import dev.webfx.stack.db.querypush.QueryStreamMonitorInfo;
 import dev.webfx.stack.db.querypush.SqlAnalyzeResultInfo;
@@ -194,7 +196,8 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             buildSignInStatusDistribution(connectedClients),
             buildClientAppDistribution(connectedClients),
             buildSystemResourceInfo(),
-            buildBootFailures());
+            buildBootFailures(),
+            buildSessionSecurityInfo());
     }
 
     /**
@@ -203,6 +206,25 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
      * threw during init/start and the task is only partially functional. Per server process, so it
      * reflects the exact task the page is connected to.
      */
+    /**
+     * The identity-token section, for back-office callers only.
+     *
+     * <p>The gate on getMonitorInfo admits ANY signed-in caller, which is right for what the rest of
+     * this snapshot holds but not for this: it says whether a token is required to assert an identity,
+     * and how long this instance has gone without hearing which sessions were revoked. A member could
+     * read both. Neither is a secret exactly — the first is discoverable by sending one message without
+     * a token — but publishing it removes the cost of asking and the chance of anyone noticing.
+     *
+     * <p><b>Advisory, not a boundary.</b> The back-office flag is asserted by the client, so a caller
+     * determined to see these five numbers can set it. It keeps them out of an ordinary member's
+     * session, and claims nothing more. The boundary would be a server-side operation check on this
+     * endpoint, which does not exist yet — the same precondition the alarm-mode control waits on.
+     * Fails closed: no flag, no section.
+     */
+    private static SessionSecurityMonitorInfo buildSessionSecurityInfo() {
+        return ThreadLocalStateHolder.isBackoffice() ? SessionSecurityMonitorRegistry.snapshot() : null;
+    }
+
     private static BootJobFailureMonitorInfo[] buildBootFailures() {
         List<ApplicationJobFailures.Failure> fs = ApplicationJobFailures.snapshot();
         BootJobFailureMonitorInfo[] failures = new BootJobFailureMonitorInfo[fs.size()];

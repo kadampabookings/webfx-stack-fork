@@ -96,6 +96,9 @@ public final class RevocationPoll {
                     catchingUp = page.isFull();
                 }
                 RevokedFamilies.forgetOlderThan(nowMillis - RevokedFamilies.RETENTION_MILLIS);
+                // Only on the way through a SUCCESSFUL read: the age of this is how an operator sees
+                // that an instance has stopped hearing about revocations performed on the other one.
+                RevokedFamilies.notePollSucceeded(nowMillis);
                 return added;
             });
     }

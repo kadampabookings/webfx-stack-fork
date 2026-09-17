@@ -5,6 +5,7 @@ import dev.webfx.platform.console.Console;
 import java.util.Collection;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * The session families known to have been revoked recently, so a token naming one can be refused on the
@@ -78,6 +79,12 @@ public final class RevokedFamilies {
     /** family id → what is known about its revocation. */
     private static final Map<String, Revoked> REVOKED = new ConcurrentHashMap<>();
 
+    /** Messages refused since boot because they named a revoked family — a figure for the monitor. */
+    private static final AtomicLong REFUSALS = new AtomicLong();
+
+    /** When the store was last read successfully, or 0 when it never has. See {@link RevocationPoll}. */
+    private static volatile long lastPollMillis;
+
     private RevokedFamilies() {}
 
     /**
@@ -86,6 +93,32 @@ public final class RevokedFamilies {
      */
     public static boolean isRevoked(String familyId) {
         return familyId != null && REVOKED.containsKey(familyId);
+    }
+
+    /** Counts a refusal. Separate from reporting one, which happens once per family, not once per message. */
+    public static void countRefusal() {
+        REFUSALS.incrementAndGet();
+    }
+
+    public static long refusalsSinceBoot() {
+        return REFUSALS.get();
+    }
+
+    /** Called by the poll after a successful read, so the monitor can show whether it is still running. */
+    public static void notePollSucceeded(long nowMillis) {
+        lastPollMillis = nowMillis;
+    }
+
+    /**
+     * How long since this instance last heard from the store, or -1 when it never has.
+     *
+     * <p>The figure worth watching on the monitor: a climbing age means revocations performed on the
+     * OTHER instance are not reaching this one, so its clients are refused at renewal instead of at
+     * once — minutes late, and silently, because nothing else looks any different.
+     */
+    public static long lastPollAgeMillis(long nowMillis) {
+        long last = lastPollMillis;
+        return last == 0 ? -1 : Math.max(0, nowMillis - last);
     }
 
     /**
@@ -150,6 +183,10 @@ public final class RevokedFamilies {
      * happens once, at boot, with nothing to lose.
      */
     public static void clear() {
+        // The SET only. The counters beside it say what this server has done since it booted, and
+        // registering a store twice — which the registry documents as harmless — must not silently
+        // restart them, least of all the poll timestamp: zeroing that reads as "never heard from the
+        // store", which is the one state the monitor is there to make visible.
         REVOKED.clear();
     }
 }
