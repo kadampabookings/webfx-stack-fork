@@ -87,6 +87,7 @@ public class LogoutCheck {
         @Override public Future<String> open(Object principal, SessionTier tier, long absoluteExpiryMillis) { return Future.failedFuture("unused"); }
         @Override public Future<FamilyRenewal> renew(String familyId, int presentedGeneration, long nowMillis) { return Future.failedFuture("unused"); }
         @Override public Future<RevocationPage> revokedSince(long sinceMillis, RevocationCursor after) { return Future.succeededFuture(RevocationPage.EMPTY); }
+        @Override public Future<List<String>> revokeOtherFamilies(Object principal, String exceptFamilyId, String reason) { return Future.succeededFuture(List.of()); }
     }
 
     /** Throws instead of answering — a service not ready yet, an interceptor refusing on the spot. */

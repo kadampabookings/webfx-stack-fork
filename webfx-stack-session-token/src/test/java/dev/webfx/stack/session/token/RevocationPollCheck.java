@@ -80,6 +80,7 @@ public class RevocationPollCheck {
         @Override public Future<String> open(Object principal, SessionTier tier, long absoluteExpiryMillis) { return Future.failedFuture("unused"); }
         @Override public Future<FamilyRenewal> renew(String familyId, int presentedGeneration, long nowMillis) { return Future.failedFuture("unused"); }
         @Override public Future<Void> revoke(String familyId, String reason) { return Future.failedFuture("unused"); }
+        @Override public Future<List<String>> revokeOtherFamilies(Object principal, String exceptFamilyId, String reason) { return Future.failedFuture("unused"); }
     }
 
     /** Polls until it says it has caught up, and answers how many pages that took. */

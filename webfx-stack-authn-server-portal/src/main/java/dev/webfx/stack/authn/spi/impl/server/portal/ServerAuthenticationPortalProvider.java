@@ -148,6 +148,27 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
             .compose(ignored -> ThreadLocalStateHolder.runWithState(callerState, () -> logoutThroughGateway(gateways)));
     }
 
+    /**
+     * Ends every session of the caller except this one, and answers how many.
+     *
+     * <p>Revoking is the whole of it. Every instance refuses those sessions on sight once it knows, and
+     * refuses them at renewal even if it never does, so a device stops at its next message.
+     *
+     * <p><b>No push, deliberately.</b> Telling the connected devices at once would be better, and the
+     * proposal asked for it — but a push is addressed by run id and the revocation is scoped by family,
+     * and those do not line up. Tabs of one browser share a session and therefore a family, while each
+     * holds its own run id: pushing to "every run id of this person except the caller's" signs out the
+     * caller's OTHER TABS, whose session was deliberately spared, and wipes the token they share with
+     * the tab that asked. It would also fire where nothing was revoked at all — a guest, or a
+     * deployment that records no families — signing devices out client-side with nothing behind it.
+     * Doing this properly means the push server knowing which family each connected client holds, which
+     * is worth building when the panic button needs it too.
+     */
+    @Override
+    public Future<Integer> revokeOtherSessions() {
+        return SessionTokenService.revokeOtherSessionsOfCurrentUser().map(List::size);
+    }
+
     /** Must run with the caller's state on the thread — see logoutWith(). */
     private static Future<Void> logoutThroughGateway(List<ServerAuthenticationGateway> gateways) {
         for (ServerAuthenticationGateway gateway : gateways) {

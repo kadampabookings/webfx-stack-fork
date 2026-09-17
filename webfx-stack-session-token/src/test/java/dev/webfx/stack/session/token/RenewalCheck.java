@@ -83,6 +83,12 @@ public class RenewalCheck {
 
         final Map<String, Long> revokedAt = new HashMap<>();
 
+        // Nothing here signs other devices out; RevokeOtherSessionsCheck covers that.
+        @Override
+        public Future<List<String>> revokeOtherFamilies(Object principal, String exceptFamilyId, String reason) {
+            return Future.succeededFuture(List.of());
+        }
+
         // Nothing here polls; RevocationPollCheck is where reading revocations back is exercised.
         @Override
         public Future<RevocationPage> revokedSince(long sinceMillis, RevocationCursor after) {

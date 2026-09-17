@@ -67,6 +67,21 @@ public interface SessionFamilyStore {
     Future<Void> revoke(String familyId, String reason);
 
     /**
+     * Ends every live family of {@code principal} except {@code exceptFamilyId} — "sign out my other
+     * devices", and later the half of the panic button that ends the sessions.
+     *
+     * <p>Answers with the ids it ended, which is what lets the caller refuse them on sight here rather
+     * than waiting for its own poll to read back its own write. The list may be short of one that the
+     * statement did end: a session opened between reading the ids and writing is revoked by the write
+     * and not named in the answer. That costs it prompt refusal on this instance and nothing else — it
+     * is refused at its next renewal like any other.
+     *
+     * <p>A principal with nobody behind it — a guest, whose sessions are reached through a booking link
+     * rather than an account — has no other devices to sign out, and this must end nothing.
+     */
+    Future<List<String>> revokeOtherFamilies(Object principal, String exceptFamilyId, String reason);
+
+    /**
      * A page of revocations, so an instance can learn what the OTHER one revoked.
      *
      * <p>Polling rather than being told, because there is no clustered event bus — the same fact that

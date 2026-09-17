@@ -6,6 +6,8 @@ import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.StateAccessor;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
+import java.util.List;
+
 /**
  * Issues session tokens, and exchanges one for its successor.
  *
@@ -219,6 +221,78 @@ public final class SessionTokenService {
     private static Future<Void> revokeAndRemember(SessionFamilyStore store, String familyId, String reason) {
         return store.revoke(familyId, reason)
             .onSuccess(ignored -> RevokedFamilies.note(familyId, System.currentTimeMillis()));
+    }
+
+    /**
+     * Recorded distinctly from a logout, which also writes "user".
+     *
+     * <p>Otherwise the one column that could answer "was I signed out, or did I sign myself out?" reads
+     * the same either way — and that question is exactly what somebody asks when a device they were not
+     * holding lands on a login screen.
+     */
+    private static final String SIGNED_OUT_ELSEWHERE_REASON = "signed-out-elsewhere";
+
+    /**
+     * Ends every session of the caller except the one they are using — "sign out my other devices".
+     *
+     * <p><b>It takes no target, and that is the security of it.</b> Both the person and the session to
+     * spare are read from the state the syncer wrote after this call's token verified. A {@code personId}
+     * parameter would turn "sign out my devices" into "sign out anybody's", which for sequential ids
+     * means everybody's — an unauthenticated denial of service against any member whose id can be
+     * guessed, and they can all be guessed.
+     *
+     * <p><b>It requires a verified token, not a claim.</b> The family id is only ever set from a token
+     * whose signature held, so demanding one is what stops a caller asserting somebody else's identity
+     * — which a client can still do while the token flip is off — and ending their sessions with it.
+     * A legacy token carries no family and is refused here too; it gets one at its next renewal, which
+     * is minutes away, and nothing is lost by waiting.
+     *
+     * <p>Answers with the families it ended, so the caller can tell those devices at once rather than
+     * leaving them to notice on their next message.
+     */
+    public static Future<List<String>> revokeOtherSessionsOfCurrentUser() {
+        Object state = ThreadLocalStateHolder.getThreadLocalState();
+        String currentFamilyId = StateAccessor.getSessionFamilyId(state);
+        Object principal = StateAccessor.getUserId(state);
+        SessionFamilyStore store = SessionFamilyStoreRegistry.getStore();
+        if (currentFamilyId == null || principal == null)
+            return Future.failedFuture("Signing out other devices needs a session this server established itself");
+        // A SUPPORT VIEW MUST NOT USE THIS. Its principal carries the viewed member's person id, so the
+        // store would end that member's sessions — their phone, their laptop — while the agent's own
+        // session, the one spared, is the agent's. A member signed out of everything by somebody else,
+        // recorded as if they had done it themselves. The read-only restriction that exists for exactly
+        // this principal cannot catch it either: these statements run as the server, which is what lets
+        // a support view renew its own token at all.
+        //
+        // Fails closed on an unanswerable question, unlike the write gate: that one is global and must
+        // not brick a deployment with no predicate registered, whereas this is one control that can
+        // simply refuse.
+        if (RestrictedPrincipalRegistry.isUserRestrictedOrUnknown(principal))
+            return Future.failedFuture("A restricted session may not end the sessions of the person it is viewing");
+        if (store == null) // nothing records sessions here, so there are no others to end
+            return Future.succeededFuture(List.of());
+        // Guarded for the reason revokeCurrentSessionFamily is: a store that throws rather than failing
+        // its future — a service not ready, an interceptor refusing on the spot — must not escape as a
+        // raw stack trace from a control a person just pressed.
+        Future<List<String>> revocation;
+        try {
+            revocation = store.revokeOtherFamilies(principal, currentFamilyId, SIGNED_OUT_ELSEWHERE_REASON);
+        } catch (RuntimeException e) {
+            return Future.failedFuture(e);
+        }
+        return revocation
+            .map(familyIds -> {
+                long now = System.currentTimeMillis();
+                // Refused on sight here from now on; the other instance learns at its next poll.
+                for (String familyId : familyIds)
+                    RevokedFamilies.note(familyId, now);
+                if (!familyIds.isEmpty())
+                    // Counts only. Who it was is in the rows themselves — revoked, with a reason and a
+                    // time — and naming a person in a log puts personal data somewhere with weaker
+                    // controls than the table it came from.
+                    Console.log("🛡 Ended " + familyIds.size() + " other session(s) at their owner's request");
+                return familyIds;
+            });
     }
 
     /**
