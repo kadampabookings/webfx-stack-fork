@@ -15,6 +15,7 @@ import dev.webfx.stack.push.server.PushServerService;
 import dev.webfx.stack.session.token.IdentityToken;
 import dev.webfx.stack.session.token.IdentityTokenPolicy;
 import dev.webfx.stack.session.token.PrincipalToken;
+import dev.webfx.stack.session.token.RevokedFamilies;
 import dev.webfx.stack.session.token.SessionLifetime;
 import dev.webfx.stack.session.token.SessionTier;
 import dev.webfx.stack.session.token.SessionTokenService;
@@ -295,6 +296,14 @@ public final class ServerSideStateSessionSyncer {
      */
     private static Future<Void> applyIdentityToken(Object clientState, IsolatedSession serverSession) {
         String serverSessionId = serverSession.id();
+        // The family id is the server's own note to itself, and everything downstream treats it that way:
+        // logout ends the family named here, and ending a family ends every session on it. But this state
+        // arrived as the client's own message header, so until a signature has held, anything in this
+        // field was chosen by the caller — who could then name somebody else's family and sign them out.
+        // Cleared FIRST, so it is absent on every path out of here, and re-set below only from a token
+        // this server verified. That is what StateAccessor.getSessionFamilyId already claims, and this is
+        // what makes the claim true.
+        StateAccessor.setSessionFamilyId(clientState, null);
         String token = StateAccessor.getUserToken(clientState);
         if (token == null || token.isEmpty()) {
             pendingRenewedTokens.remove(serverSessionId); // nothing to hand a client that is no longer holding one
@@ -320,6 +329,26 @@ public final class ServerSideStateSessionSyncer {
             } else {
                 noteExpiredIdentityToken(serverSessionId);
             }
+            return Future.succeededFuture();
+        }
+        // Revoked, and said so on THIS message rather than at the next renewal. The case that needs it is
+        // the one rotation is blind to: a thief who never races anybody presents a perfectly current
+        // generation and renews unopposed, so the only signal is somebody deliberately ending the session.
+        // Consulted here, before the identity is applied, because a session that is over should not be
+        // established for the length of one message first.
+        //
+        // A set lookup, no round trip — see RevokedFamilies for why that is affordable where a query is
+        // not, and for why being lossy costs nothing: this makes revocation PROMPT, and the renewal check
+        // below is what makes it CERTAIN.
+        if (RevokedFamilies.isRevoked(identity.familyId())) {
+            // Once per family, not once per message: a client that does not act on the logout — a
+            // background tab, the media heartbeat, a reconnect loop — presents the same dead token every
+            // time, and after a bulk revocation that is a line per message per client, drowning the log
+            // exactly when somebody is reading it to confirm the revocation worked.
+            if (RevokedFamilies.shouldReportRefusal(identity.familyId()))
+                Console.log("🛡 Identity token names a session that has been revoked — treating as logged out");
+            pendingRenewedTokens.remove(serverSessionId); // nothing to hand a session that is over
+            StateAccessor.setUserId(clientState, LogoutUserId.LOGOUT_USER_ID);
             return Future.succeededFuture();
         }
         StateAccessor.setUserId(clientState, identity.principal());

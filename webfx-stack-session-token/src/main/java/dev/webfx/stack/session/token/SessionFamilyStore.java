@@ -2,6 +2,8 @@ package dev.webfx.stack.session.token;
 
 import dev.webfx.platform.async.Future;
 
+import java.util.List;
+
 /**
  * Where a session family's generation counter lives, so that a retired token can be recognised.
  *
@@ -63,6 +65,61 @@ public interface SessionFamilyStore {
      * it logs in again.
      */
     Future<Void> revoke(String familyId, String reason);
+
+    /**
+     * A page of revocations, so an instance can learn what the OTHER one revoked.
+     *
+     * <p>Polling rather than being told, because there is no clustered event bus — the same fact that
+     * made the token self-contained. A revocation performed while handling a message on one instance is
+     * invisible to the other, and during a blue/green deploy that other instance holds half the clients.
+     *
+     * <p>Two ways to ask, and the difference is what keeps a bulk revocation from stalling:
+     *
+     * <ul>
+     *   <li><b>{@code after == null}</b> — everything revoked since {@code sinceMillis}. The caller sets
+     *       that bound a little behind what it has already seen, because a revocation is stamped when its
+     *       UPDATE runs and becomes visible only when its transaction commits, so a window starting
+     *       exactly where the last one ended can step over a slow commit. Re-reading is free: noting a
+     *       revocation twice changes nothing.</li>
+     *   <li><b>{@code after != null}</b> — strictly after that cursor, which is where the previous full
+     *       page ended. Needed because "sign out everywhere" revokes every row in ONE statement, so
+     *       thousands of families share a single timestamp to the microsecond: a time-only bound would
+     *       return the same first page forever and never reach the rest.</li>
+     * </ul>
+     *
+     * <p>Ordered oldest first and capped at {@link #REVOCATION_PAGE_SIZE}, so a mass revocation is read in
+     * pages rather than in one unbounded result.
+     */
+    Future<RevocationPage> revokedSince(long sinceMillis, RevocationCursor after);
+
+    /**
+     * The cap on one page. A bulk revocation — offboarding, or a member ending every session they have —
+     * must not come back as one unbounded result.
+     */
+    int REVOCATION_PAGE_SIZE = 5_000;
+
+    /** A revoked family, and when: the two things {@code RevokedFamilies} needs and nothing else. */
+    record Revocation(String familyId, long revokedAtMillis) {}
+
+    /**
+     * Where a page ended, so the next one can resume strictly after it.
+     *
+     * <p>Opaque to whoever polls: the store writes it and the store reads it. It carries the revocation
+     * time as the store's own TEXT rather than as milliseconds on purpose — milliseconds are a rounding
+     * of a microsecond timestamp, and a cursor that rounded UP would skip the rows it was meant to
+     * resume from, which is the very case this exists for.
+     */
+    record RevocationCursor(String stamp, String familyId) {}
+
+    /** One page, and where it ended. {@link #isFull()} is how a caller knows there is more to read. */
+    record RevocationPage(List<Revocation> revocations, RevocationCursor next) {
+
+        public static final RevocationPage EMPTY = new RevocationPage(List.of(), null);
+
+        public boolean isFull() {
+            return revocations.size() >= REVOCATION_PAGE_SIZE;
+        }
+    }
 
     /** What a family turned out to allow. Only {@link Verdict#RENEWED} and {@link Verdict#CURRENT} carry a usable generation. */
     enum Verdict {

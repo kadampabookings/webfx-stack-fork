@@ -74,9 +74,19 @@ public class RenewalCheck {
         @Override
         public Future<Void> revoke(String familyId, String reason) {
             Family family = families.get(familyId);
-            if (family != null)
+            if (family != null) {
                 families.put(familyId, new Family(family.generation, family.lastRenewed, family.absoluteExpiry, true));
+                revokedAt.put(familyId, NOW);
+            }
             return Future.succeededFuture();
+        }
+
+        final Map<String, Long> revokedAt = new HashMap<>();
+
+        // Nothing here polls; RevocationPollCheck is where reading revocations back is exercised.
+        @Override
+        public Future<RevocationPage> revokedSince(long sinceMillis, RevocationCursor after) {
+            return Future.succeededFuture(RevocationPage.EMPTY);
         }
     }
 
@@ -138,6 +148,11 @@ public class RenewalCheck {
         check("no replacement token is handed out", reuse.token() == null);
         check("the family is revoked, so the OTHER holder dies too",
               store.families.get(first.familyId()).revoked());
+        // Whoever else holds a copy is refused on their NEXT MESSAGE rather than at their next renewal,
+        // which is up to an access window away — and on this instance without waiting to poll for its
+        // own write.
+        check("and refused on sight from now on, without waiting for a renewal",
+              RevokedFamilies.isRevoked(first.familyId()));
         check("even the legitimate current token no longer renews",
               renew(second, muchLater).outcome() == SessionTokenService.TokenRenewal.Outcome.ENDED);
 
@@ -201,6 +216,8 @@ public class RenewalCheck {
             StateAccessor.setSessionFamilyId(StateAccessor.createEmptyState(), loggingOut.familyId()),
             () -> SessionTokenService.revokeCurrentSessionFamily().result());
         check("the family is revoked", out.families.get(loggingOut.familyId()).revoked());
+        check("and refused on sight, so the other tabs stop at their next message",
+              RevokedFamilies.isRevoked(loggingOut.familyId()));
         check("so the token stops renewing, even though its signature still holds",
               renew(loggingOut, NOW + 1000).outcome() == SessionTokenService.TokenRenewal.Outcome.ENDED);
 

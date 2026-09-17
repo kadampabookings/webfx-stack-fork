@@ -136,7 +136,7 @@ public final class SessionTokenService {
                     // a decision anybody would defend afterwards.
                     Console.log("🛡 A retired identity token was presented — ending the whole session family."
                                 + " A copy of it is in someone else's hands.");
-                    yield store.revoke(presented.familyId(), "reuse-detected")
+                    yield revokeAndRemember(store, presented.familyId(), "reuse-detected")
                         .otherwise(e -> {
                             Console.log("⚠️ Could not record the revocation of a reused session family: " + e);
                             return null;
@@ -196,7 +196,7 @@ public final class SessionTokenService {
         // and its session goes on naming the user.
         Future<Void> revocation;
         try {
-            revocation = store.revoke(familyId, "user");
+            revocation = revokeAndRemember(store, familyId, "user");
         } catch (RuntimeException e) {
             revocation = Future.failedFuture(e);
         }
@@ -206,6 +206,19 @@ public final class SessionTokenService {
                             + " usable until its access window ends: " + e);
                 return null;
             });
+    }
+
+    /**
+     * Ends a family in the store AND tells this instance at once, so it refuses that family's tokens
+     * without waiting to poll for its own write.
+     *
+     * <p>Noted only when the write succeeded: a revocation the store did not record is not a revocation,
+     * and refusing the family here while the other instance keeps honouring it would be the worst of both
+     * — a session that works or not depending on which task holds the socket.
+     */
+    private static Future<Void> revokeAndRemember(SessionFamilyStore store, String familyId, String reason) {
+        return store.revoke(familyId, reason)
+            .onSuccess(ignored -> RevokedFamilies.note(familyId, System.currentTimeMillis()));
     }
 
     /**
@@ -260,7 +273,7 @@ public final class SessionTokenService {
         } catch (Exception e) {
             Console.log("⚠️ Could not mint an identity token for " + principal.getClass().getSimpleName() + ": " + e);
             if (storeToTidy != null && familyId != null)
-                storeToTidy.revoke(familyId, "never-issued")
+                revokeAndRemember(storeToTidy, familyId, "never-issued")
                     .onFailure(err -> Console.log("⚠️ Could not tidy away an unused session family: " + err));
             return null;
         }
