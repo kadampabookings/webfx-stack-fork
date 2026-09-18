@@ -39,7 +39,8 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
             if (accepts)
                 return gateway.authenticate(userCredentials);
         }
-        return Future.failedFuture("No server authentication gateway found accepting credentials " + userCredentials);
+        // The TYPE, never the object: credentials carry passwords, and this message travels back to the client
+        return Future.failedFuture("No server authentication gateway found accepting credentials " + typeNameOf(userCredentials));
     }
 
     private final Map<Object, FutureBroadcaster<?>> userVerificationBroadcasters = new HashMap<>();
@@ -117,7 +118,7 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
                         });
             }
         }
-        return Future.failedFuture("No server authentication gateway found accepting credentials update " + updateCredentialsArgument);
+        return Future.failedFuture("No server authentication gateway found accepting credentials update " + typeNameOf(updateCredentialsArgument));
     }
 
     @Override
@@ -182,4 +183,9 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
         return Future.failedFuture("logout() failed on server authentication portal because no server gateway accepted UserId " + ThreadLocalStateHolder.getUserId());
     }
 
+
+    /** A credentials argument named by its type — safe to put in a message, unlike its toString(). */
+    private static String typeNameOf(Object argument) {
+        return argument == null ? "null" : argument.getClass().getSimpleName();
+    }
 }
