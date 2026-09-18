@@ -19,6 +19,7 @@ public final class SessionAccessor {
     private final static String PWA_ATTRIBUE_NAME = "pwa"; // Server-side: whether the client runs as an installed PWA, sent once at connection
     private final static String CLIENT_PROFILE_ATTRIBUE_NAME = "clientProfile"; // Server-side: compact "browser|os|deviceType" profile, sent once at connection
     private final static String SERVER_SESSION_ID_SYNCED_ATTRIBUE_NAME = "serverSessionIdSynced"; // Used only on the server side to store the info if the client knows the sessionId
+    private final static String SESSION_FAMILY_ID_ATTRIBUE_NAME = "sessionFamilyId"; // Server-side: the family of the last token this server verified for this session
 
 
     public static String getServerSessionId(Session session) {
@@ -51,6 +52,23 @@ public final class SessionAccessor {
 
     public static boolean changeRunId(Session session, String runId, boolean skipNullValue) {
         return changeSessionAttribute(session, RUN_ID_ATTRIBUE_NAME, runId, skipNullValue);
+    }
+
+    /**
+     * The session family of the last identity token this server verified for this session, or null if it
+     * has verified none.
+     *
+     * <p>Server-side only, and unlike its counterpart in the state it is never read from a client message
+     * — {@link StateAccessor#getSessionFamilyId} explains why that distinction is the whole basis for
+     * acting on a family at all. Held here so the push layer can learn, on the ordinary live tick, which
+     * family a connection belongs to, and so reach it when that family is revoked.
+     */
+    public static String getSessionFamilyId(Session session) {
+        return session.get(SESSION_FAMILY_ID_ATTRIBUE_NAME);
+    }
+
+    public static boolean changeSessionFamilyId(Session session, String sessionFamilyId, boolean skipNullValue) {
+        return changeSessionAttribute(session, SESSION_FAMILY_ID_ATTRIBUE_NAME, sessionFamilyId, skipNullValue);
     }
 
     public static Boolean isBackoffice(Session session) {

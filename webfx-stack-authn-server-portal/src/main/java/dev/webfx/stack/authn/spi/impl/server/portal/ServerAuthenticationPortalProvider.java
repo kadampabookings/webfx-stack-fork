@@ -151,18 +151,21 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
     /**
      * Ends every session of the caller except this one, and answers how many.
      *
-     * <p>Revoking is the whole of it. Every instance refuses those sessions on sight once it knows, and
-     * refuses them at renewal even if it never does, so a device stops at its next message.
+     * <p>Revoking is the whole of the enforcement. Every instance refuses those sessions on sight once it
+     * knows, and refuses them at renewal even if it never does, so a device stops at its next message.
      *
-     * <p><b>No push, deliberately.</b> Telling the connected devices at once would be better, and the
-     * proposal asked for it — but a push is addressed by run id and the revocation is scoped by family,
-     * and those do not line up. Tabs of one browser share a session and therefore a family, while each
-     * holds its own run id: pushing to "every run id of this person except the caller's" signs out the
-     * caller's OTHER TABS, whose session was deliberately spared, and wipes the token they share with
-     * the tab that asked. It would also fire where nothing was revoked at all — a guest, or a
-     * deployment that records no families — signing devices out client-side with nothing behind it.
-     * Doing this properly means the push server knowing which family each connected client holds, which
-     * is worth building when the panic button needs it too.
+     * <p><b>The devices are now told at once, and the distinction matters.</b> An earlier version of this
+     * did NOT push, because a push is addressed by run id while a revocation is scoped by family, and
+     * those do not line up: tabs of one browser share a family but each holds its own run id, so pushing
+     * to "every run id of this person except the caller's" would sign out the caller's OTHER TABS, whose
+     * session was deliberately spared. That objection was answered by making the push family-aware rather
+     * than by-person — the push server now records which family each connected client holds — so what is
+     * told is exactly the set that was revoked, and the caller's spared family is not in it. See
+     * RevokedFamilyLogoutPush.
+     *
+     * <p>Do not read that as a stronger guarantee than it is. The push is a courtesy to a cooperating
+     * client; revoking is still the whole of the enforcement, and a device that ignores the message, or
+     * is offline, or is connected to the other instance, stops at its next message as before.
      */
     @Override
     public Future<Integer> revokeOtherSessions() {

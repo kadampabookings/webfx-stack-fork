@@ -2,7 +2,9 @@ package dev.webfx.stack.session.token;
 
 import dev.webfx.platform.console.Console;
 
+import java.util.ArrayList;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
@@ -136,8 +138,12 @@ public final class RevokedFamilies {
 
     /** Records a revocation, whether this instance performed it or learned of it from the store. */
     public static void note(String familyId, long revokedAtMillis) {
-        if (familyId != null)
-            REVOKED.putIfAbsent(familyId, new Revoked(revokedAtMillis));
+        if (familyId == null)
+            return;
+        // Announced only when it is NEW here. The same family is noted again by the poll's safety window
+        // minutes later, and telling its clients a second time is a message that says nothing.
+        if (REVOKED.putIfAbsent(familyId, new Revoked(revokedAtMillis)) == null)
+            RevocationBroadcastRegistry.broadcast(List.of(familyId));
     }
 
     /**
@@ -145,7 +151,10 @@ public final class RevokedFamilies {
      * an overlapping window re-reads the revocations it already knows on every pass.
      */
     public static int noteAll(Collection<SessionFamilyStore.Revocation> revocations) {
-        int added = 0;
+        // Collected rather than announced one by one: a bulk revocation arrives as one page, and the
+        // broadcaster can then walk the connected clients once for the whole batch instead of once per
+        // family.
+        List<String> added = new ArrayList<>();
         for (SessionFamilyStore.Revocation revocation : revocations) {
             // Guarded here and not only in the store: this map throws on a null key, and the poll that
             // feeds it is the one loop that must not die — a store returning a row with no id would
@@ -153,9 +162,10 @@ public final class RevokedFamilies {
             if (revocation == null || revocation.familyId() == null)
                 continue;
             if (REVOKED.putIfAbsent(revocation.familyId(), new Revoked(revocation.revokedAtMillis())) == null)
-                added++;
+                added.add(revocation.familyId());
         }
-        return added;
+        RevocationBroadcastRegistry.broadcast(added);
+        return added.size();
     }
 
     /**

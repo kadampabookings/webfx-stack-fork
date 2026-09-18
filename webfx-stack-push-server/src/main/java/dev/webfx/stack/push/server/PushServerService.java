@@ -6,6 +6,7 @@ import dev.webfx.stack.com.bus.Bus;
 import dev.webfx.platform.async.Future;
 import dev.webfx.platform.service.SingleServiceProvider;
 
+import java.util.Collection;
 import java.util.List;
 import java.util.ServiceLoader;
 
@@ -44,6 +45,20 @@ public final class PushServerService {
     }
 
     /** Snapshot of currently-connected clients' invariant metadata, for the /monitor distributions. */
+    /**
+     * Records which session family a connected client's verified token belongs to, so revoking that family
+     * can reach the client at once rather than at its next message. {@code ownerSessionId} is the session
+     * entitled to say so — see the provider's javadoc for why a runId alone must not be believed.
+     */
+    public static void setClientSessionFamily(Object clientRunId, String sessionFamilyId, String ownerSessionId) {
+        getProvider().setClientSessionFamily(clientRunId, sessionFamilyId, ownerSessionId);
+    }
+
+    /** The run ids of connected clients whose token belongs to one of these families. */
+    public static List<Object> snapshotClientRunIdsOfFamilies(Collection<String> sessionFamilyIds) {
+        return getProvider().snapshotClientRunIdsOfFamilies(sessionFamilyIds);
+    }
+
     public static List<PushClientMetadata> snapshotConnectedClients() {
         return getProvider().snapshotConnectedClients();
     }

@@ -6,6 +6,7 @@ import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.StateAccessor;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -283,9 +284,14 @@ public final class SessionTokenService {
         return revocation
             .map(familyIds -> {
                 long now = System.currentTimeMillis();
-                // Refused on sight here from now on; the other instance learns at its next poll.
+                // Refused on sight here from now on; the other instance learns at its next poll. Noted as
+                // ONE batch because noting is also what announces the revocation to any of those sessions
+                // connected here, and announcing per family would walk every connected client once per
+                // device signed out.
+                List<SessionFamilyStore.Revocation> revocations = new ArrayList<>(familyIds.size());
                 for (String familyId : familyIds)
-                    RevokedFamilies.note(familyId, now);
+                    revocations.add(new SessionFamilyStore.Revocation(familyId, now));
+                RevokedFamilies.noteAll(revocations);
                 if (!familyIds.isEmpty())
                     // Counts only. Who it was is in the rows themselves — revoked, with a reason and a
                     // time — and naming a person in a log puts personal data somewhere with weaker

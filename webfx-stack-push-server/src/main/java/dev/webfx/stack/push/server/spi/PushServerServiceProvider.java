@@ -7,6 +7,7 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.Bus;
 import dev.webfx.stack.push.ClientPushBusAddressesSharedByBothClientAndServer;
 
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 
@@ -36,6 +37,40 @@ public interface PushServerServiceProvider {
 
     /** Snapshot of the currently-connected clients' invariant metadata, for the /monitor distributions. */
     default List<PushClientMetadata> snapshotConnectedClients() {
+        return Collections.emptyList();
+    }
+
+    /**
+     * Records which session family a connected client's verified token belongs to, so a revocation of that
+     * family can reach the client at once instead of waiting for its next message.
+     *
+     * <p>Deliberately NOT part of {@link #setClientMetadata}: that describes a client for the monitor, and
+     * a family id is a security routing fact that has no business appearing in a snapshot somebody
+     * browses. Re-supplied on every live tick so it follows a login and a token rotation without anything
+     * having to invalidate it — but NOT, unlike the userId beside it, a logout: the syncer records a
+     * family only when a token verified and never clears one, so a logged-out connection keeps naming the
+     * family it last held. That is deliberate and safe (pushing a logout at a client that is already
+     * logged out does nothing) and it is what keeps a connection reachable on a message that carried no
+     * token. Null therefore means "never held a readable token", not "logged out".
+     *
+     * <p><b>{@code ownerSessionId} is not decoration.</b> The runId is chosen by the client and nothing
+     * authenticates it; the family is taken from a token this server verified. Believing the pair would let
+     * a caller file its own genuine family under somebody else's runId and then sign that person out by
+     * ending its own session. So the first session to claim a runId owns it, and a claim arriving from a
+     * different session is refused — the refused client simply keeps finding out at its next message, which
+     * is where it was before any of this existed.
+     *
+     * <p>No-op when the client isn't registered yet — the next live tick supplies it again.
+     */
+    default void setClientSessionFamily(Object clientRunId, String sessionFamilyId, String ownerSessionId) {
+    }
+
+    /**
+     * The run ids of connected clients whose token belongs to one of these families — whom to tell that
+     * their session is over. Empty when nothing matches, which is the ordinary case: the client is usually
+     * connected to the OTHER instance.
+     */
+    default List<Object> snapshotClientRunIdsOfFamilies(Collection<String> sessionFamilyIds) {
         return Collections.emptyList();
     }
 

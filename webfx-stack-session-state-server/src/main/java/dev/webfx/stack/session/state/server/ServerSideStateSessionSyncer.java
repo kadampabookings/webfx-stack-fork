@@ -636,9 +636,19 @@ public final class ServerSideStateSessionSyncer {
         boolean clientVersionChanged = SessionAccessor.changeClientVersion(serverSession, StateAccessor.getClientVersion(clientState), true);
         boolean pwaChanged = SessionAccessor.changePwa(serverSession, StateAccessor.getPwa(clientState), true);
         boolean clientProfileChanged = SessionAccessor.changeClientProfile(serverSession, StateAccessor.getClientProfile(clientState), true);
+        // serverSession.sessionFamilyId <= the family applyIdentityToken just VERIFIED (it runs before this,
+        // and cleared the field first, so a value here came from a signature that held). Kept in the session
+        // so the push layer learns on its ordinary live tick which family a connection belongs to, and can
+        // therefore reach it the moment that family is revoked instead of at the client's next message.
+        //
+        // Set-if-present like the fields above, and never cleared, for two different reasons that agree: a
+        // client that omits its token on a message would otherwise stop being addressable, and a stale family
+        // on a connection whose session has ended is harmless — pushing a logout to a client that is already
+        // logged out does nothing, and a new login overwrites the field before it could mean anyone else.
+        boolean sessionFamilyChanged = SessionAccessor.changeSessionFamilyId(serverSession, StateAccessor.getSessionFamilyId(clientState), true);
         // Since clients communicate the runId on first connection or reconnection, the sessionId must be synced in both cases (on reconnection, the session id may have changed)
         boolean sessionIdSyncedChanged = runId != null && SessionAccessor.changeServerSessionIdSynced(serverSession, false);
-        if (userIdChanged || runIdChanged || backofficeChanged || clientVersionChanged || pwaChanged || clientProfileChanged || sessionIdSyncedChanged || forceStore)
+        if (userIdChanged || runIdChanged || backofficeChanged || clientVersionChanged || pwaChanged || clientProfileChanged || sessionFamilyChanged || sessionIdSyncedChanged || forceStore)
             return storeServerSession(serverSession);
         return Future.succeededFuture(serverSession);
     }

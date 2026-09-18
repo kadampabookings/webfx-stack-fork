@@ -112,11 +112,22 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
      * Notified when a client is confirmed live, carrying its runId plus the session facts the push
      * layer records for the /monitor page (current userId, build version, PWA mode, device profile,
      * BO/FO app) — without this module depending on it. {@code userId} reflects the session's CURRENT
-     * login (re-read each tick).
+     * login, re-read each tick. {@code sessionFamilyId} is not a monitor fact at all but the address a
+     * revoked session is reached at: it lets the push layer tell exactly the clients of a revoked family
+     * that they are over, instead of leaving each to find out at its next message. It is re-read each
+     * tick too, but it does NOT follow a logout the way the userId does — the syncer only ever records a
+     * family it verified, so a logged-out session goes on naming its last one.
+     *
+     * <p>{@code ownerSessionId} is what makes that address safe to act on. The runId above is CHOSEN BY THE
+     * CLIENT — it arrives in the message state and nothing authenticates it — while the family beside it
+     * comes from a token this server verified. Handed over as a bare pair, the two would let a caller file
+     * its own (perfectly genuine) family under somebody else's runId, and then sign that person out simply
+     * by ending its own session. So the session that first claims a runId owns it, and a later claim from a
+     * different session is refused rather than believed.
      */
     @FunctionalInterface
     public interface ClientLiveListener {
-        void onClientLive(Object runId, Object userId, String clientVersion, Boolean pwa, String clientProfile, Boolean backoffice);
+        void onClientLive(Object runId, Object userId, String clientVersion, Boolean pwa, String clientProfile, Boolean backoffice, String sessionFamilyId, String ownerSessionId);
     }
 
     private static ClientLiveListener clientLiveListener;
@@ -137,7 +148,7 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
                 // Read the invariant client facts from the session (the client sent them once at
                 // connection). Re-supplied on every live tick so a push entry created after connect
                 // still picks them up.
-                clientLiveListener.onClientLive(runId, SessionAccessor.getUserId(session), SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session), SessionAccessor.getClientProfile(session), SessionAccessor.isBackoffice(session));
+                clientLiveListener.onClientLive(runId, SessionAccessor.getUserId(session), SessionAccessor.getClientVersion(session), SessionAccessor.getPwa(session), SessionAccessor.getClientProfile(session), SessionAccessor.isBackoffice(session), SessionAccessor.getSessionFamilyId(session), session.id());
                 return true; // to tell that we found the runId
             }
             Console.warn("ServerJsonBusStateManager.clientIsLive() was called but no runId could be found (session id = " + session.id() + ", ping = " + ping + ")");
