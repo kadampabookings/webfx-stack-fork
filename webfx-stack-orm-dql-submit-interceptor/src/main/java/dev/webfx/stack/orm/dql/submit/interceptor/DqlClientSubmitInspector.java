@@ -2,6 +2,7 @@ package dev.webfx.stack.orm.dql.submit.interceptor;
 
 import dev.webfx.stack.db.submit.ClientSubmitGuard;
 import dev.webfx.stack.db.submit.ClientWriteDenyList;
+import dev.webfx.stack.db.submit.ProtectedEntityWriteRegistry;
 import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.orm.domainmodel.DataSourceModel;
@@ -15,14 +16,19 @@ import dev.webfx.stack.orm.expression.terms.ExpressionArray;
 import dev.webfx.stack.orm.expression.terms.Insert;
 import dev.webfx.stack.orm.expression.terms.Update;
 
+import java.util.Map;
+
 /**
- * Reads a client's DQL write and refuses it when it sets a column in {@link ClientWriteDenyList}.
+ * Reads a client's DQL write for {@link ClientSubmitGuard}: refuses it when it sets a column in
+ * {@link ClientWriteDenyList}, and otherwise reports the write it makes, for the application's row rules.
  *
  * <p>Judged on the domain model's resolution of every assignment — the SQL table and column each field maps to —
  * so a write cannot rephrase its way round the list with an alias or a differently spelled name. And judged
  * FAIL-CLOSED wherever the statement cannot be read field by field: an assignment whose left-hand side is not a
- * plain field, or an insert in a form that has no set clause, on a table that has any denied column, is refused,
- * since it might be setting one. A statement that will not parse at all is refused too; it would not have run.
+ * plain field, or an insert in a form that has no set clause, is refused on a table that has any denied column —
+ * and on every table once the application has row rules, since those judge the fields a write names and a field
+ * this could not read would pass them unseen. No client sends such a statement: the change-set layer writes plain
+ * {@code field = value} assignments. A statement that will not parse at all is refused too; it would not have run.
  *
  * <p>Parses without the cache, like the read inspector: client writes are driven by user actions, in the tens per
  * second at most, and a parse the translation step repeats is cheaper than a second place for a verdict to go
@@ -33,49 +39,66 @@ import dev.webfx.stack.orm.expression.terms.Update;
 final class DqlClientSubmitInspector implements ClientSubmitGuard.Inspector {
 
     @Override
-    public String refusalReason(SubmitArgument argument) {
-        if (ClientWriteDenyList.isEmpty())
-            return null;
+    public ClientSubmitGuard.Inspection inspect(SubmitArgument argument) {
+        if (ClientWriteDenyList.isEmpty() && !ClientSubmitGuard.hasWritePolicy())
+            return ClientSubmitGuard.Inspection.allowed(null);
         DataSourceModel dataSourceModel = DataSourceModelService.getDataSourceModel(argument.getDataSourceId());
         if (dataSourceModel == null)
-            return ClientSubmitGuard.UNCHECKABLE_REFUSED;
-        return refusalReason(dataSourceModel, argument.getStatement());
+            return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.UNCHECKABLE_REFUSED);
+        return inspect(dataSourceModel, argument.getStatement(), argument.getParameters());
     }
 
     /**
-     * The decision itself, given the model to read the statement against. Package-private so the check in
+     * The reading itself, given the model to read the statement against. Package-private so the check in
      * scripts/checks/client-write-guard can drive it with the real domain model and no running server.
      */
-    static String refusalReason(DataSourceModel dataSourceModel, String dqlStatement) {
+    static ClientSubmitGuard.Inspection inspect(DataSourceModel dataSourceModel, String dqlStatement, Object[] parameters) {
         DqlStatement<Object> statement;
         try {
             statement = dataSourceModel.parseStatement(dqlStatement);
         } catch (RuntimeException e) {
-            return ClientSubmitGuard.UNCHECKABLE_REFUSED;
+            return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.UNCHECKABLE_REFUSED);
         }
+        ProtectedEntityWriteRegistry.WriteVerb verb =
+              statement instanceof Insert ? ProtectedEntityWriteRegistry.WriteVerb.INSERT
+            : statement instanceof Update ? ProtectedEntityWriteRegistry.WriteVerb.UPDATE
+            : statement instanceof Delete ? ProtectedEntityWriteRegistry.WriteVerb.DELETE
+            : null;
+        if (verb == null)
+            return ClientSubmitGuard.Inspection.allowed(null); // not a write
         DomainClass domainClass = statement.getDomainClass() instanceof DomainClass dc ? dc
             : dataSourceModel.getDomainModel().getClass(statement.getDomainClass());
+        if (domainClass == null)
+            return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.UNCHECKABLE_REFUSED);
         // A table that is nothing but credentials is closed to every write, deletes included
-        if (domainClass != null && ClientWriteDenyList.isTableDenied(domainClass.getSqlTableName())
-            && (statement instanceof Insert || statement instanceof Update || statement instanceof Delete))
-            return ClientSubmitGuard.DENIED_REFUSED;
-        if (!(statement instanceof Insert) && !(statement instanceof Update))
-            return null; // a delete sets nothing; anything else is not a write
-        boolean guarded = domainClass != null && ClientWriteDenyList.isTableGuarded(domainClass.getSqlTableName());
-        ExpressionArray<Object> setClause = statement instanceof Update update ? update.getSetClause()
-            : ((Insert<Object>) statement).getSetClause();
-        if (setClause == null)
-            return guarded ? ClientSubmitGuard.UNCHECKABLE_REFUSED : null;
-        for (Expression<?> expression : setClause.getExpressions()) {
-            if (expression instanceof Equals<?> equals && equals.getLeft() instanceof DomainField field) {
-                DomainClass fieldClass = field.getDomainClass() != null ? field.getDomainClass() : domainClass;
-                String table = fieldClass == null ? null : fieldClass.getSqlTableName();
-                if (ClientWriteDenyList.isColumnDenied(table, field.getSqlColumnName()))
-                    return ClientSubmitGuard.DENIED_REFUSED;
-            } else if (guarded) {
-                return ClientSubmitGuard.UNCHECKABLE_REFUSED;
+        if (ClientWriteDenyList.isTableDenied(domainClass.getSqlTableName()))
+            return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.DENIED_REFUSED);
+        if (verb != ProtectedEntityWriteRegistry.WriteVerb.DELETE) {
+            boolean mustReadEveryField = ClientWriteDenyList.isTableGuarded(domainClass.getSqlTableName())
+                                         || ClientSubmitGuard.hasWritePolicy();
+            ExpressionArray<Object> setClause = statement instanceof Update update ? update.getSetClause()
+                : ((Insert<Object>) statement).getSetClause();
+            if (setClause == null) {
+                if (mustReadEveryField)
+                    return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.UNCHECKABLE_REFUSED);
+            } else {
+                for (Expression<?> expression : setClause.getExpressions()) {
+                    if (expression instanceof Equals<?> equals && equals.getLeft() instanceof DomainField field) {
+                        DomainClass fieldClass = field.getDomainClass() != null ? field.getDomainClass() : domainClass;
+                        if (ClientWriteDenyList.isColumnDenied(fieldClass.getSqlTableName(), field.getSqlColumnName()))
+                            return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.DENIED_REFUSED);
+                    } else if (mustReadEveryField) {
+                        return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.UNCHECKABLE_REFUSED);
+                    }
+                }
             }
         }
-        return null;
+        // The same reading of fields, values and target the application's write authorizer is given
+        Map<String, Object> writtenValues = DqlSubmitInterceptorInitializer.writtenValuesOf(statement, parameters);
+        return ClientSubmitGuard.Inspection.allowed(new ProtectedEntityWriteRegistry.WriteRequest(
+            domainClass.getName(), verb,
+            writtenValues.keySet().toArray(new String[0]),
+            writtenValues,
+            DqlSubmitInterceptorInitializer.targetIdOf(statement, parameters)));
     }
 }

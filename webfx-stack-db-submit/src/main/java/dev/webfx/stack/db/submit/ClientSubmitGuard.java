@@ -17,6 +17,8 @@ import java.util.Set;
  * <h3>What it stops</h3>
  *
  * <ul>
+ *   <li><b>The application's row rules</b> ({@link WritePolicy}) — for what a column list cannot express, such as
+ *       a column that may be written on some rows but not others. Judged on the parsed write, after the list.</li>
  *   <li><b>The columns in {@link ClientWriteDenyList}</b> — password hashes, sign-in usernames, the account's
  *       disabled flag — however a DQL statement sets them. Enforced by an {@link Inspector} a server module
  *       registers, because reading a statement properly needs the DQL parser, which this module cannot depend
@@ -50,8 +52,34 @@ public final class ClientSubmitGuard {
     /** DQL inspection — in practice, parsing the statement and checking what it sets. */
     @FunctionalInterface
     public interface Inspector {
-        /** Why this DQL write must not run for a client, or null when it may. Must not throw. */
-        String refusalReason(SubmitArgument argument);
+        /** What this DQL statement is — a refusal, or the write it makes. Must not throw. */
+        Inspection inspect(SubmitArgument argument);
+    }
+
+    /**
+     * An inspector's reading of one statement: either why it must not run, or — when it may as far as the deny
+     * list goes — the write it makes, in the shape the application's {@link WritePolicy} judges. A statement that
+     * is not a write carries neither.
+     */
+    public record Inspection(String refusal, ProtectedEntityWriteRegistry.WriteRequest write) {
+        public static Inspection refused(String refusal) {
+            return new Inspection(refusal, null);
+        }
+
+        public static Inspection allowed(ProtectedEntityWriteRegistry.WriteRequest write) {
+            return new Inspection(null, write);
+        }
+    }
+
+    /**
+     * The application's rules about particular rows, judged on the parsed write — for what a list of columns cannot
+     * say, such as "not this column on THAT kind of row". May look rows up, so it answers with a future; it is
+     * called on the caller's thread, and the endpoints run the write in the caller's state afterwards.
+     */
+    @FunctionalInterface
+    public interface WritePolicy {
+        /** Why this client write must not run, or null when it may. A failure refuses. */
+        Future<String> refusalReason(ProtectedEntityWriteRegistry.WriteRequest write);
     }
 
     /**
@@ -73,6 +101,7 @@ public final class ClientSubmitGuard {
 
     private static volatile Inspector inspector;
     private static volatile RawStatementPolicy rawStatementPolicy;
+    private static volatile WritePolicy writePolicy;
 
     /** Refusal shapes already reported, so a client retrying one refused write logs one line, not thousands. */
     private static final Set<String> REPORTED = new HashSet<>();
@@ -83,6 +112,16 @@ public final class ClientSubmitGuard {
     /** Installs the inspector that enforces {@link ClientWriteDenyList}. Last registration wins. */
     public static void registerInspector(Inspector inspector) {
         ClientSubmitGuard.inspector = inspector;
+    }
+
+    /** Installs the application's row rules. Last registration wins. */
+    public static void registerWritePolicy(WritePolicy policy) {
+        ClientSubmitGuard.writePolicy = policy;
+    }
+
+    /** Whether a write policy is registered — an inspector then reports every write, not only guarded ones. */
+    public static boolean hasWritePolicy() {
+        return writePolicy != null;
     }
 
     /** Installs the application's list of raw statements a client may still send. With none, no raw statement runs. */
@@ -128,18 +167,36 @@ public final class ClientSubmitGuard {
             return allowed ? Future.succeededFuture() : refused(argument, RAW_STATEMENT_REFUSED);
         }
         Inspector i = inspector;
+        WritePolicy policy = writePolicy;
         if (i == null)
             // Fail CLOSED once something has been declared: a deployment that says a column must never be written
-            // by a client, but has nothing able to check for it, must refuse rather than let it through.
-            return ClientWriteDenyList.isEmpty() ? Future.succeededFuture() : refused(argument, UNCHECKABLE_REFUSED);
-        String refusal;
+            // by a client, or has rules about rows, but has nothing able to read a statement, must refuse rather
+            // than let it through.
+            return ClientWriteDenyList.isEmpty() && policy == null ? Future.succeededFuture() : refused(argument, UNCHECKABLE_REFUSED);
+        Inspection inspection;
         try {
-            refusal = i.refusalReason(argument);
+            inspection = i.inspect(argument);
         } catch (Throwable e) {
             Console.log("⚠️ Client write inspector failed — refusing the write: " + e);
-            refusal = UNCHECKABLE_REFUSED;
+            inspection = Inspection.refused(UNCHECKABLE_REFUSED);
         }
-        return refusal == null ? Future.succeededFuture() : refused(argument, refusal);
+        if (inspection == null)
+            return refused(argument, UNCHECKABLE_REFUSED);
+        if (inspection.refusal() != null)
+            return refused(argument, inspection.refusal());
+        if (policy == null || inspection.write() == null)
+            return Future.succeededFuture();
+        Future<String> answer;
+        try {
+            answer = policy.refusalReason(inspection.write());
+        } catch (Throwable e) {
+            answer = null;
+        }
+        if (answer == null)
+            return refused(argument, UNCHECKABLE_REFUSED);
+        return answer
+            .otherwise(e -> UNCHECKABLE_REFUSED) // a policy that fails denies; it does not abstain
+            .compose(refusal -> refusal == null ? Future.succeededFuture() : refused(argument, refusal));
     }
 
     /**

@@ -6,6 +6,7 @@ import dev.webfx.stack.db.submit.ClientSubmitGuard;
 import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.db.submit.SubmitResult;
 import dev.webfx.stack.db.submit.SubmitService;
+import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 
 /**
  * @author Bruno Salmon
@@ -15,7 +16,11 @@ public final class ExecuteSubmitBatchMethodEndpoint extends AsyncFunctionBusCall
     public ExecuteSubmitBatchMethodEndpoint() {
         // Every statement of a client's batch passes the client guard before any of it runs — see
         // ClientSubmitGuard.checkBatch.
-        super(SubmitMethodAddress.EXECUTE_SUBMIT_BATCH_METHOD_ADDRESS,
-            batch -> ClientSubmitGuard.checkBatch(batch).compose(ignored -> SubmitService.executeSubmitBatch(batch)));
+        // Run in the caller's state even if the guard answered later — see ExecuteSubmitMethodEndpoint.
+        super(SubmitMethodAddress.EXECUTE_SUBMIT_BATCH_METHOD_ADDRESS, batch -> {
+            Object callerState = ThreadLocalStateHolder.getThreadLocalState();
+            return ClientSubmitGuard.checkBatch(batch).compose(ignored ->
+                ThreadLocalStateHolder.runWithState(callerState, () -> SubmitService.executeSubmitBatch(batch)));
+        });
     }
 }

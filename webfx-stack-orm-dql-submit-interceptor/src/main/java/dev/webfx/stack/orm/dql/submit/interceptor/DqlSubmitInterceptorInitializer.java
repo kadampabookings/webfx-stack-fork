@@ -107,7 +107,7 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * so an entity whose fields are individually protected should also carry an entity-level rule, or a
      * statement this cannot read would slip past on a technicality.
      */
-    private static java.util.Map<String, Object> writtenValuesOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
+    static java.util.Map<String, Object> writtenValuesOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
         ExpressionArray<Object> setClause =
               dqlStatement instanceof Update ? ((Update<Object>) dqlStatement).getSetClause()
             : dqlStatement instanceof Insert ? ((Insert<Object>) dqlStatement).getSetClause()
@@ -116,13 +116,78 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
             return java.util.Collections.emptyMap();
         // Ordered, so the field list handed to a policy reads in statement order rather than hash order.
         java.util.Map<String, Object> values = new java.util.LinkedHashMap<>();
-        for (Expression<?> expression : setClause.getExpressions())
-            if (expression instanceof Equals equals && equals.getLeft() instanceof DomainField field)
+        UnnamedPositions unnamed = unnamedPositionsOf(dqlStatement);
+        Expression<?>[] assignments = setClause.getExpressions();
+        for (int i = 0; i < assignments.length; i++)
+            if (assignments[i] instanceof Equals equals && equals.getLeft() instanceof DomainField field) {
                 // A value that is not a resolvable scalar maps to null: the FIELD was written (so a
                 // field rule still fires) but its value is unknown to us, which a policy reading values
                 // must treat as unknown rather than as absent.
-                values.put(field.getName(), DqlScopeUtil.resolveScalarValue(equals.getRight(), parameters));
+                Object raw = unnamed != null && unnamed.setPositions()[i] >= 0
+                    ? parameterAt(parameters, unnamed.setPositions()[i])
+                    : DqlScopeUtil.resolveRawValue(equals.getRight(), parameters);
+                values.put(field.getName(), writtenValueOf(raw));
+            }
         return values;
+    }
+
+    /**
+     * One assignment's value, from what the parameter or constant carried: a boolean kept as a Boolean (a row rule may
+     * turn on one — whether a person is being made an account owner), a number or string as a string, anything else
+     * unknown (null).
+     */
+    private static Object writtenValueOf(Object raw) {
+        if (raw instanceof Boolean)
+            return raw;
+        return raw instanceof Number || raw instanceof String ? String.valueOf(raw) : null;
+    }
+
+    private static Object parameterAt(Object[] parameters, int position) {
+        return parameters != null && position >= 0 && position < parameters.length ? parameters[position] : null;
+    }
+
+    /**
+     * Where each unnamed "?" of a write sits in its parameter array: per assignment (-1 where the value is a constant),
+     * and for a {@code where id = ?} (-1 otherwise) — or null when the statement is not the simple shape this can vouch
+     * for.
+     *
+     * <p>The legacy JavaFX/GWT change sets write {@code update X set a=?, b=? where id=?}, with the values in that
+     * order. A "?" carries no index of its own — every one is the same object — so its position is its order in the
+     * compiled SQL, which counts EVERY "?" in the statement, including one inside a subquery. So this reads only the
+     * change-set shape itself: every assignment's value a bare "?" or a constant, nothing else. Any other value — an
+     * expression, a subquery, a numbered parameter mixed in — answers null, and the values and target are then
+     * unknown rather than guessed: guessing is exactly what a subquery holding a "?" would exploit, shifting every
+     * later position so a rule reads one row while the write lands on another.
+     */
+    private record UnnamedPositions(int[] setPositions, int wherePosition) {}
+
+    private static UnnamedPositions unnamedPositionsOf(DqlStatement<Object> dqlStatement) {
+        ExpressionArray<Object> setClause =
+              dqlStatement instanceof Update ? ((Update<Object>) dqlStatement).getSetClause()
+            : dqlStatement instanceof Insert ? ((Insert<Object>) dqlStatement).getSetClause()
+            : null;
+        Expression<?>[] assignments = setClause == null ? new Expression<?>[0] : setClause.getExpressions();
+        int[] positions = new int[assignments.length];
+        int next = 0;
+        for (int i = 0; i < assignments.length; i++) {
+            if (!(assignments[i] instanceof Equals<?> equals))
+                return null;
+            Expression<?> value = equals.getRight();
+            if (value == ParameterReference.UNNAMED_PARAMETER_REFERENCE)
+                positions[i] = next++;
+            else if (value instanceof Constant)
+                positions[i] = -1;
+            else
+                return null;
+        }
+        int wherePosition = -1;
+        Expression<?> where = dqlStatement.getWhere();
+        if (where instanceof Equals<?> equals && equals.getLeft() instanceof DomainField field && "id".equals(field.getName())
+            && equals.getRight() == ParameterReference.UNNAMED_PARAMETER_REFERENCE)
+            wherePosition = next;
+        else if (where != null && !(where instanceof Equals<?> equals2 && equals2.getRight() instanceof Constant))
+            return null; // a where this cannot read may hold a "?" of its own
+        return new UnnamedPositions(positions, wherePosition);
     }
 
     /**
@@ -137,12 +202,19 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * write whose target it cannot see: a statement shaped to defeat this extraction is exactly the
      * statement that would be used to reach somebody else's row.
      */
-    private static Object targetIdOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
+    static Object targetIdOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
         Expression<?> where = dqlStatement.getWhere();
         if (where instanceof Equals equals
             && equals.getLeft() instanceof DomainField field
-            && "id".equals(field.getName()))
+            && "id".equals(field.getName())) {
+            if (equals.getRight() == ParameterReference.UNNAMED_PARAMETER_REFERENCE) {
+                // The legacy "where id=?": its position is its order — see unnamedPositionsOf
+                UnnamedPositions unnamed = unnamedPositionsOf(dqlStatement);
+                return unnamed == null || unnamed.wherePosition() < 0 ? null
+                    : writtenValueOf(parameterAt(parameters, unnamed.wherePosition()));
+            }
             return DqlScopeUtil.resolveScalarValue(equals.getRight(), parameters);
+        }
         return null;
     }
 

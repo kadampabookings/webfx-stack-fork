@@ -101,14 +101,22 @@ final class DqlScopeUtil {
 
     /** The term's scalar value normalized to String, or null when unusable. */
     static Object resolveScalarValue(Expression<?> right, Object[] parameters) {
-        Object value = null;
-        if (right instanceof Constant)
-            value = ((Constant<?>) right).getConstantValue();
-        else if (right instanceof ParameterReference) {
-            int index = ((ParameterReference<?>) right).getIndex(); // $N syntax, 1-based; -1 for named
-            if (parameters != null && index >= 1 && index <= parameters.length)
-                value = parameters[index - 1];
-        }
+        Object value = resolveRawValue(right, parameters);
         return value instanceof Number || value instanceof String ? String.valueOf(value) : null;
+    }
+
+    /**
+     * The value a constant or a numbered ($N) parameter stands for, as sent — or null for anything else, including an
+     * unnamed "?" (whose position only its order can tell; see DqlSubmitInterceptorInitializer).
+     */
+    static Object resolveRawValue(Expression<?> right, Object[] parameters) {
+        if (right instanceof Constant)
+            return ((Constant<?>) right).getConstantValue();
+        if (right instanceof ParameterReference) {
+            int index = ((ParameterReference<?>) right).getIndex(); // $N syntax, 1-based; -1 for named or unnamed
+            if (parameters != null && index >= 1 && index <= parameters.length)
+                return parameters[index - 1];
+        }
+        return null;
     }
 }
