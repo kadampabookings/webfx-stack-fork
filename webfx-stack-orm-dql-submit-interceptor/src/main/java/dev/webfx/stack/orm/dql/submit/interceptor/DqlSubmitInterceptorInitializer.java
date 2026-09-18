@@ -12,6 +12,7 @@ import dev.webfx.stack.db.datascope.aggregate.AggregateScopeBuilder;
 import dev.webfx.stack.db.datascope.schema.SchemaScope;
 import dev.webfx.stack.db.datascope.schema.SchemaScopeBuilder;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
+import dev.webfx.stack.db.submit.ClientSubmitGuard;
 import dev.webfx.stack.db.submit.ProtectedEntityWriteRegistry;
 import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.db.submit.SubmitResult;
@@ -34,6 +35,9 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
 
     @Override
     public void onInit() {
+        // The client write guard's DQL half: refuses a client write that sets a column the application has declared
+        // no client may set. See ClientSubmitGuard and DqlClientSubmitInspector.
+        ClientSubmitGuard.registerInspector(new DqlClientSubmitInspector());
         // The purpose of this interceptor is to automatically translate DQL to SQL and compute the schema scope when
         // the submit reaches its local data source (works only with DQL)
         SingleServiceProvider.registerServiceInterceptor(SubmitServiceProvider.class, targetProvider ->
