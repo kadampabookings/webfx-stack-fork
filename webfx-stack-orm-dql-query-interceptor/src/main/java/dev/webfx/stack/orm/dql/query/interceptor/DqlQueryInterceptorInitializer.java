@@ -8,6 +8,7 @@ import dev.webfx.platform.service.SingleServiceProvider;
 import dev.webfx.platform.util.Arrays;
 import dev.webfx.platform.util.collection.Collections;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
+import dev.webfx.stack.db.query.ClientQueryGuard;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.spi.QueryServiceProvider;
@@ -29,6 +30,10 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
         SingleServiceProvider.registerServiceInterceptor(QueryServiceProvider.class, targetProvider ->
                 argument -> interceptAndExecuteQuery(argument, targetProvider)
         );
+        // And the check a CLIENT's query passes before any of that: registered here because this is the module that
+        // knows how to compile DQL, which the client-query endpoints must not depend on. Inert where nothing has
+        // been declared secret — including in the browser, where this initializer also runs.
+        ClientQueryGuard.registerInspector(new DqlClientQueryInspector());
     }
 
     private Future<QueryResult> interceptAndExecuteQuery(QueryArgument argument, QueryServiceProvider targetProvider) {

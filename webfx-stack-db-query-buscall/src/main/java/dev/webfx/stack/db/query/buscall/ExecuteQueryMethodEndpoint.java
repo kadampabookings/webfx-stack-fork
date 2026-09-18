@@ -1,6 +1,8 @@
 package dev.webfx.stack.db.query.buscall;
 
+import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.call.spi.AsyncFunctionBusCallEndpoint;
+import dev.webfx.stack.db.query.ClientQueryGuard;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
@@ -11,9 +13,14 @@ import dev.webfx.stack.db.query.QueryService;
 public final class ExecuteQueryMethodEndpoint extends AsyncFunctionBusCallEndpoint<QueryArgument, QueryResult> {
 
     public ExecuteQueryMethodEndpoint() {
-        super(QueryServiceBusAddress.EXECUTE_QUERY_METHOD_ADDRESS, arg ->
-            QueryService.executeQuery(arg).map(result -> stripMetadataIfRequested(arg, result))
-        );
+        super(QueryServiceBusAddress.EXECUTE_QUERY_METHOD_ADDRESS, arg -> {
+            // Every query arriving here was sent by a client, so it passes the client guard before it runs —
+            // see ClientQueryGuard for what that refuses, and why server code never comes through here.
+            String refusal = ClientQueryGuard.refusalReason(arg);
+            if (refusal != null)
+                return Future.failedFuture(refusal);
+            return QueryService.executeQuery(arg).map(result -> stripMetadataIfRequested(arg, result));
+        });
     }
 
     /**
