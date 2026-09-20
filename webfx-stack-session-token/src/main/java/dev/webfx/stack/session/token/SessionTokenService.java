@@ -234,6 +234,13 @@ public final class SessionTokenService {
     private static final String SIGNED_OUT_ELSEWHERE_REASON = "signed-out-elsewhere";
 
     /**
+     * Why every session of a person ended at once: their own word that the device they were signed in on is in
+     * somebody else's hands. Distinct from the two above, because the rows are what a super administrator reads
+     * when the same person asks to be let back in an hour later.
+     */
+    private static final String DEVICE_STOLEN_REASON = "device-stolen";
+
+    /**
      * Ends every session of the caller except the one they are using — "sign out my other devices".
      *
      * <p><b>It takes no target, and that is the security of it.</b> Both the person and the session to
@@ -251,13 +258,45 @@ public final class SessionTokenService {
      * <p>Answers with the families it ended, so the caller can tell those devices at once rather than
      * leaving them to notice on their next message.
      */
+    /**
+     * Ends EVERY session of the caller, the one they are calling from included — the panic button's half of
+     * "my device has been stolen".
+     *
+     * <p>Signing yourself out too is the point rather than a side effect: the premise of the control is that
+     * stopping the thief matters more than keeping yourself working, and a session spared here is one the thief
+     * might be holding — this call cannot tell which device is on the other end of which family.
+     *
+     * <p>Read from the verified token like {@link #revokeOtherSessionsOfCurrentUser}, takes no target for the
+     * same reason, and refuses a support view for the same reason: its principal carries the VIEWED member's
+     * person id, so unchecked it would end that member's sessions instead of the agent's.
+     *
+     * <p>It is only half of the control. Revocation ends the sessions in progress; it does nothing about the
+     * thief signing back in, which is what disabling the account does (AccountSignInRestrictionStore). Either
+     * alone leaves a way through — see the spec, and V0101.
+     */
+    public static Future<List<String>> endEverySessionOfCurrentUser() {
+        return revokeFamiliesOfCurrentUser(false, DEVICE_STOLEN_REASON, "Ended every session of a person who reported their device stolen");
+    }
+
     public static Future<List<String>> revokeOtherSessionsOfCurrentUser() {
+        return revokeFamiliesOfCurrentUser(true, SIGNED_OUT_ELSEWHERE_REASON, "Ended %d other session(s) at their owner's request");
+    }
+
+    /**
+     * The body of both controls above. {@code spareCurrentSession} is the only difference between them: "sign
+     * out my other devices" keeps the caller signed in, the panic button does not.
+     *
+     * @param spareCurrentSession whether the family this call arrived on survives
+     * @param reason              what the revoked rows record, which is what a rescue reads later
+     * @param logMessage          counts only, never who — {@code %d} is the number of families ended
+     */
+    private static Future<List<String>> revokeFamiliesOfCurrentUser(boolean spareCurrentSession, String reason, String logMessage) {
         Object state = ThreadLocalStateHolder.getThreadLocalState();
         String currentFamilyId = StateAccessor.getSessionFamilyId(state);
         Object principal = StateAccessor.getUserId(state);
         SessionFamilyStore store = SessionFamilyStoreRegistry.getStore();
         if (currentFamilyId == null || principal == null)
-            return Future.failedFuture("Signing out other devices needs a session this server established itself");
+            return Future.failedFuture("Ending sessions needs a session this server established itself");
         // A SUPPORT VIEW MUST NOT USE THIS. Its principal carries the viewed member's person id, so the
         // store would end that member's sessions — their phone, their laptop — while the agent's own
         // session, the one spared, is the agent's. A member signed out of everything by somebody else,
@@ -277,7 +316,8 @@ public final class SessionTokenService {
         // raw stack trace from a control a person just pressed.
         Future<List<String>> revocation;
         try {
-            revocation = store.revokeOtherFamilies(principal, currentFamilyId, SIGNED_OUT_ELSEWHERE_REASON);
+            // "" spares nothing: `id <> ''` holds for every real family, so the caller's own goes too
+            revocation = store.revokeOtherFamilies(principal, spareCurrentSession ? currentFamilyId : "", reason);
         } catch (RuntimeException e) {
             return Future.failedFuture(e);
         }
@@ -296,7 +336,7 @@ public final class SessionTokenService {
                     // Counts only. Who it was is in the rows themselves — revoked, with a reason and a
                     // time — and naming a person in a log puts personal data somewhere with weaker
                     // controls than the table it came from.
-                    Console.log("🛡 Ended " + familyIds.size() + " other session(s) at their owner's request");
+                    Console.log("🛡 " + logMessage.replace("%d", String.valueOf(familyIds.size())));
                 return familyIds;
             });
     }

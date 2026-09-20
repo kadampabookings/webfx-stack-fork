@@ -87,6 +87,11 @@ public class RevokeOtherSessionsCheck {
         return ThreadLocalStateHolder.runWithState(state, SessionTokenService::revokeOtherSessionsOfCurrentUser);
     }
 
+    /** The panic button's half: end every session of this person, the calling one included. */
+    static Future<List<String>> endEverySessionAs(Object state) {
+        return ThreadLocalStateHolder.runWithState(state, SessionTokenService::endEverySessionOfCurrentUser);
+    }
+
     public static void main(String[] args) {
         CheckPrincipal me = new CheckPrincipal(42, 7);
         CheckPrincipal someoneElse = new CheckPrincipal(43, 8);
@@ -164,6 +169,40 @@ public class RevokeOtherSessionsCheck {
         check("and an unanswerable question refuses too",
               revokeAs(verifiedState(me, "agents-support-view")).failed());
         RestrictedPrincipalRegistry.registerRestrictedUserPredicate(principal -> false);
+
+        System.out.println("the panic button — my device has been stolen:");
+        RevokedFamilies.clear();
+        FamilyStore stolen = new FamilyStore();
+        SessionFamilyStoreRegistry.register(stolen);
+        stolen.open("the-stolen-laptop", me);
+        stolen.open("mine-phone", me);
+        stolen.open("mine-here", me);
+        stolen.open("someone-else", someoneElse);
+        List<String> all = endEverySessionAs(verifiedState(me, "mine-here")).result();
+        // Signing yourself out too is the point, not a side effect: this call cannot tell which family is
+        // the thief's, and stopping them matters more than keeping the owner working.
+        check("every session of mine ends, the one asking included", all.size() == 3 && all.contains("mine-here"));
+        check("nothing of mine is left open", stolen.livePrincipalByFamily.keySet().stream().noneMatch(f -> me.equals(stolen.livePrincipalByFamily.get(f))));
+        check("somebody else's session is still untouched", stolen.livePrincipalByFamily.containsKey("someone-else"));
+        // "" and not the caller's family: `id <> ''` holds for every real family, which is what takes the
+        // caller's own with the rest.
+        check("the store was told to spare nothing", "".equals(stolen.askedToSpare));
+        // A rescue an hour later reads these rows to tell this from an ordinary sign-out.
+        check("recorded as a theft, not as signing out elsewhere", "device-stolen".equals(stolen.reasonGiven));
+
+        System.out.println("the panic button refuses what the other control refuses:");
+        RevokedFamilies.clear();
+        FamilyStore panicViewed = new FamilyStore();
+        SessionFamilyStoreRegistry.register(panicViewed);
+        panicViewed.open("members-phone", me);
+        RestrictedPrincipalRegistry.registerRestrictedUserPredicate(principal -> me.equals(principal));
+        check("a support view may not end the member's sessions either",
+              endEverySessionAs(verifiedState(me, "agents-support-view")).failed());
+        check("and the member keeps every session they had",
+              panicViewed.livePrincipalByFamily.containsKey("members-phone"));
+        RestrictedPrincipalRegistry.registerRestrictedUserPredicate(principal -> false);
+        check("a session with no verified family is refused, as it is for signing out others",
+              endEverySessionAs(verifiedState(me, null)).failed());
 
         System.out.println("a deployment that records no sessions:");
         RevokedFamilies.clear();
