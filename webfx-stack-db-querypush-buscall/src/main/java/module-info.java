@@ -7,6 +7,7 @@ module webfx.stack.db.querypush.buscall {
     requires webfx.platform.async;
     requires webfx.stack.com.bus.call;
     requires webfx.stack.com.serial;
+    requires webfx.stack.db.query;
     requires webfx.stack.db.querypush;
 
     // Exported packages
