@@ -58,7 +58,20 @@ public final class SessionLifetime {
      * message — see the syncer's pending-delivery grace.
      */
     public static long accessWindowMillis() {
-        return scaled(ACCESS_WINDOW_BASE_MILLIS);
+        return accessWindowMillis(System.currentTimeMillis());
+    }
+
+    /**
+     * The access window in effect at {@code nowMillis} — the alarm's short one while
+     * {@link SecurityAlarm} is raised, the ordinary one otherwise.
+     *
+     * <p>Takes the time so that one message decides the window once and answers every question about
+     * itself the same way, rather than straddling the moment an alarm lapses.
+     */
+    public static long accessWindowMillis(long nowMillis) {
+        return SecurityAlarm.isRaised(nowMillis)
+            ? Math.min(SecurityAlarm.ACCESS_WINDOW_MILLIS, scaled(ACCESS_WINDOW_BASE_MILLIS))
+            : scaled(ACCESS_WINDOW_BASE_MILLIS);
     }
 
     // ── Test acceleration ────────────────────────────────────────────────────────────────────────────
@@ -192,9 +205,9 @@ public final class SessionLifetime {
     // so shrinking it with everything else would make an ordinary second tab look like a theft on a
     // developer's machine and nowhere else — a test environment reporting a failure that does not exist.
 
-    /** When a token minted now stops being usable without renewal. */
+    /** When a token minted now stops being usable without renewal — the alarm's short window while raised. */
     public static long accessExpiryFrom(long nowMillis) {
-        return nowMillis + accessWindowMillis();
+        return nowMillis + accessWindowMillis(nowMillis);
     }
 
     /**
@@ -206,8 +219,19 @@ public final class SessionLifetime {
         return Math.min(nowMillis + idleWindowMillis(tier), absoluteExpiryMillis);
     }
 
-    /** Whether a token whose access window ends at {@code accessExpiryMillis} is due to be renewed. */
+    /**
+     * Whether a token whose access window ends at {@code accessExpiryMillis} is due to be renewed.
+     *
+     * <p>While the alarm is raised, a token with MORE life left than the alarm allows is due at once.
+     * That is what makes a shortened window reach the sessions that already exist: their expiry was
+     * signed when they were minted and cannot be rewritten, so the rule has to be about how much of it
+     * is left. A token minted during the alarm has at most the alarm's window left and is not caught by
+     * this — it renews on the ordinary rule below, every couple of minutes, which is the point.
+     */
     public static boolean isRenewalDue(long nowMillis, long accessExpiryMillis) {
-        return accessExpiryMillis - nowMillis <= (long) (accessWindowMillis() * RENEWAL_THRESHOLD_FRACTION);
+        long window = accessWindowMillis(nowMillis);
+        if (accessExpiryMillis - nowMillis > window)
+            return true;
+        return accessExpiryMillis - nowMillis <= (long) (window * RENEWAL_THRESHOLD_FRACTION);
     }
 }

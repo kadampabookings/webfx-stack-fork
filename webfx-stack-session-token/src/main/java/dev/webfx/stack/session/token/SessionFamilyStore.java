@@ -82,6 +82,36 @@ public interface SessionFamilyStore {
     Future<List<String>> revokeOtherFamilies(Object principal, String exceptFamilyId, String reason);
 
     /**
+     * When alarm mode lapses, or 0 when it is not raised — read on the same poll as revocations, and for
+     * the same reason: instances do not hear each other, so the database is where they agree.
+     *
+     * <p>Here rather than in a store of its own because it is the same question at a different scale —
+     * "which sessions should stop trusting themselves, and how soon" — read by the same task, on the same
+     * tick, against the same datasource. A deployment whose store does not implement it simply never
+     * raises the alarm, which is why this answers "none" by default rather than failing.
+     *
+     * @see SecurityAlarm
+     */
+    default Future<Long> alarmExpiryMillis() {
+        return Future.succeededFuture(0L);
+    }
+
+    /**
+     * Raises alarm mode until {@code expiryMillis}, or extends it to then — the store records the moment
+     * it lapses, never a flag, so that it ends without anybody having to remember to end it.
+     *
+     * <p>Answers with the expiry actually in force afterwards, which is the later of what was asked for
+     * and what was already there: a second raise must never SHORTEN an alarm somebody else has just
+     * raised for longer.
+     *
+     * @param expiryMillis      when the alarm should lapse
+     * @param raisedByPersonId  who raised it, for the record; may be null where the store keeps none
+     */
+    default Future<Long> raiseAlarm(long expiryMillis, Object raisedByPersonId) {
+        return Future.failedFuture("This deployment does not record alarm mode");
+    }
+
+    /**
      * A page of revocations, so an instance can learn what the OTHER one revoked.
      *
      * <p>Polling rather than being told, because there is no clustered event bus — the same fact that

@@ -16,6 +16,7 @@ import dev.webfx.stack.session.token.IdentityToken;
 import dev.webfx.stack.session.token.IdentityTokenPolicy;
 import dev.webfx.stack.session.token.PrincipalToken;
 import dev.webfx.stack.session.token.RevokedFamilies;
+import dev.webfx.stack.session.token.SecurityAlarm;
 import dev.webfx.stack.session.token.SessionLifetime;
 import dev.webfx.stack.session.token.SessionTier;
 import dev.webfx.stack.session.token.SessionTokenService;
@@ -508,6 +509,26 @@ public final class ServerSideStateSessionSyncer {
      * <p>Also the place the entry is retired: a client presenting anything OTHER than the token we replaced
      * has moved on, so there is nothing left to deliver.
      */
+    /**
+     * How long a client is excused for still presenting the token its successor replaced — the grace above,
+     * except while alarm mode is raised, when it is the alarm's own window.
+     *
+     * <p>Without this the alarm does not reach the one client it most wants to: this check sits IN FRONT of
+     * the access window and the renewal rule, so a client that simply never adopts its successor is served
+     * for a whole ordinary access window with no round trip to the store — half an hour, through an alarm
+     * raised to make every session re-check itself every couple of minutes. A thief holding a stolen token
+     * has every reason to be that client. Shortened only while an alarm is raised, so the ordinary case this
+     * grace exists for — a closed laptop, a dropped connection — is untouched the rest of the time.
+     *
+     * <p>What still reaches such a session either way is {@link RevokedFamilies}, checked on every message
+     * before any of this. The grace only ever delays finding out that a GENERATION was retired.
+     */
+    private static long deliveryGraceMillis(long nowMillis) {
+        return SecurityAlarm.isRaised(nowMillis)
+            ? Math.min(PENDING_DELIVERY_GRACE_MILLIS, SecurityAlarm.ACCESS_WINDOW_MILLIS)
+            : PENDING_DELIVERY_GRACE_MILLIS;
+    }
+
     private static boolean awaitingDelivery(String serverSessionId, String presentedToken, long nowMillis) {
         PendingToken pending = pendingRenewedTokens.get(serverSessionId);
         if (pending == null)
@@ -516,12 +537,13 @@ public final class ServerSideStateSessionSyncer {
             pendingRenewedTokens.remove(serverSessionId, pending);
             return false;
         }
-        if (nowMillis - pending.mintedAtMillis() <= PENDING_DELIVERY_GRACE_MILLIS)
+        if (nowMillis - pending.mintedAtMillis() <= deliveryGraceMillis(nowMillis))
             return true;
         // Long enough. Stop excusing the old token and let the store say what it thinks of it — which,
         // for a client that has had every message since offering it the successor, is unlikely to be kind.
         Console.log("🛡 A renewed identity token went unclaimed for a whole access window; judging the"
-                    + " token still being presented on its own merits");
+                    + " token still being presented on its own merits"
+                    + (SecurityAlarm.isRaised(nowMillis) ? " (alarm mode: the grace is the alarm's window)" : ""));
         pendingRenewedTokens.remove(serverSessionId, pending);
         return false;
     }
