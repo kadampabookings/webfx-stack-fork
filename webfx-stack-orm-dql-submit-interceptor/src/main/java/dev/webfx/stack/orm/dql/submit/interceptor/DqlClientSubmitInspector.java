@@ -99,6 +99,7 @@ final class DqlClientSubmitInspector implements ClientSubmitGuard.Inspector {
             domainClass.getName(), verb,
             writtenValues.keySet().toArray(new String[0]),
             writtenValues,
-            DqlSubmitInterceptorInitializer.targetIdOf(statement, parameters)));
+            DqlSubmitInterceptorInitializer.targetIdOf(statement, parameters),
+            DqlSubmitInterceptorInitializer.isUnboundedWrite(verb, statement)));
     }
 }

@@ -193,9 +193,10 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
     /**
      * The id of the row a statement changes, or null when that cannot be read.
      *
-     * <p>Only a WHERE that is exactly {@code id = value} yields an answer, which covers what the change
-     * set layer generates ({@code update Person set … where id=$2}) and deliberately nothing cleverer.
-     * Anything else — a compound condition, a subquery, a non-id predicate — returns null.
+     * <p>An answer comes only from an {@code id = value} test, found either as the whole WHERE — what the
+     * change set layer generates ({@code update Person set … where id=$2}) — or as one side of a
+     * conjunction. Anything else — a disjunction, a subquery, a non-id predicate — returns null. See
+     * {@code targetIdIn} for why a conjunction may be entered and a disjunction may not.
      *
      * <p>Returning null for what this cannot read is the whole safety of the thing, and only works
      * because null means UNKNOWN to a policy rather than UNCONSTRAINED. An ownership rule must refuse a
@@ -203,7 +204,27 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * statement that would be used to reach somebody else's row.
      */
     static Object targetIdOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
-        Expression<?> where = dqlStatement.getWhere();
+        return targetIdIn(dqlStatement.getWhere(), dqlStatement, parameters);
+    }
+
+    /**
+     * Looks for {@code id = value}, descending conjunctions but never disjunctions.
+     *
+     * <p><b>An AND is safe to look inside and an OR is not</b>, and the asymmetry is the whole of it:
+     * {@code A and B} affects at most the rows {@code A} alone would, so finding {@code id = 7} anywhere
+     * in a conjunction proves the statement touches at most row 7. {@code A or B} affects at least those
+     * rows and possibly many more, so {@code id = 7 or true} would report 7 while rewriting the table.
+     *
+     * <p>This exists because the statements that ADD a condition to an id were being read as having no
+     * readable target at all — {@code where id=$1 and frontendAccount=$2}, which is the safest shape a
+     * client sends, scored the same as a statement with no id in it. A rule refusing unreadable targets
+     * would have refused precisely the writes that constrain themselves most.
+     */
+    private static Object targetIdIn(Expression<?> where, DqlStatement<Object> dqlStatement, Object[] parameters) {
+        if (where instanceof And<?> and) {
+            Object left = targetIdIn(and.getLeft(), dqlStatement, parameters);
+            return left != null ? left : targetIdIn(and.getRight(), dqlStatement, parameters);
+        }
         if (where instanceof Equals equals
             && equals.getLeft() instanceof DomainField field
             && "id".equals(field.getName())) {
@@ -216,6 +237,90 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
             return DqlScopeUtil.resolveScalarValue(equals.getRight(), parameters);
         }
         return null;
+    }
+
+    /**
+     * Whether this write names no bound at all on which rows it touches.
+     *
+     * <p><b>The obvious tests are both wrong, and the second one is wrong in a way that looks right.</b>
+     * "Has no WHERE" misses {@code where true}. Its replacement — does the WHERE mention any column,
+     * which {@code collectPersistentTerms} answers — misses {@code delete from Person where id=id}, and
+     * a review caught it after the rule had been written and documented on the strength of the second.
+     * {@code id != -1}, {@code id > 0}, {@code id is not null}, {@code $1 = $1} and
+     * {@code id in (select …)} all mention columns, all pass that test, and all match every row.
+     *
+     * <p>So the question is asked the other way round: not "is this unbounded?", which cannot be decided
+     * from shape, but "is there a predicate that BINDS?" — an equality or an IN, with a column on one
+     * side and a literal or a {@code $n} on the other, reachable through conjunctions only. A shape that
+     * does not clearly bind is treated as not binding, which is the direction that refuses rather than
+     * the one that allows.
+     *
+     * <p><b>What it still does not catch, said plainly so nobody reads this as more than it is:</b>
+     * {@code where removed = $1} binds by this test and can still match nearly every row. This is a
+     * floor against the statement that names no bound whatsoever; it is not an ownership rule, and
+     * whose rows a caller may touch is answered by the per-entity authorizer with the caller in hand.
+     *
+     * <p>An insert is never unbounded: it has no WHERE to be missing, and every insert would otherwise
+     * read as the most dangerous shape there is.
+     */
+    static boolean isUnboundedWrite(ProtectedEntityWriteRegistry.WriteVerb verb, DqlStatement<Object> dqlStatement) {
+        return verb != ProtectedEntityWriteRegistry.WriteVerb.INSERT
+               && !bindsAnyRows(dqlStatement.getWhere());
+    }
+
+    /**
+     * Whether any conjunct of this WHERE restricts the rows it matches.
+     *
+     * <p>Conjunctions only, for the reason {@code targetIdIn} gives: one binding conjunct of
+     * {@code A and B} bounds the whole of it, whereas one binding side of {@code A or B} bounds nothing
+     * — {@code id = $1 or true} would otherwise read as bound.
+     */
+    private static boolean bindsAnyRows(Expression<?> where) {
+        if (where instanceof And<?> and)
+            return bindsAnyRows(and.getLeft()) || bindsAnyRows(and.getRight());
+        if (where instanceof Equals<?> equals)
+            return bindsColumnToValue(equals.getLeft(), equals.getRight())
+                   || bindsColumnToValue(equals.getRight(), equals.getLeft());
+        if (where instanceof In<?> in)
+            return isColumn(in.getLeft()) && isValueList(in.getRight());
+        return false;
+    }
+
+    private static boolean bindsColumnToValue(Expression<?> column, Expression<?> value) {
+        return isColumn(column) && isValue(value);
+    }
+
+    /** A column of the row being written, including one reached through a foreign key. */
+    private static boolean isColumn(Expression<?> expression) {
+        return expression instanceof DomainField
+               || expression instanceof IdExpression
+               // `document.person = $1`: a dot whose RIGHT is a column. Deliberately not any dot — a
+               // dot may carry an arbitrary expression (`fk.(a or b)`), and `fk.(a or b) = true` binds
+               // nothing while looking exactly like an ordinary equality.
+               || expression instanceof Dot<?> dot && isColumn(dot.getRight());
+    }
+
+    /**
+     * A literal or a {@code $n}, judged by SHAPE and not by the value the parameter happens to hold.
+     *
+     * <p>Reading the value would refuse {@code where list = $1} when $1 arrives null — a statement that
+     * matches nothing and did no harm — and a rule that refuses depending on the data is a rule that
+     * fails in production and not in a check.
+     */
+    private static boolean isValue(Expression<?> expression) {
+        return expression instanceof Constant || expression instanceof ParameterReference;
+    }
+
+    /** {@code in ($1,$2)} or {@code in (1,2)} — never {@code in (select …)}, which bounds nothing here. */
+    private static boolean isValueList(Expression<?> expression) {
+        if (isValue(expression))
+            return true;
+        if (!(expression instanceof ExpressionArray<?> array))
+            return false;
+        for (Expression<?> element : array.getExpressions())
+            if (!isValue(element))
+                return false;
+        return array.getExpressions().length > 0;
     }
 
     private record ProtectedWrite(String entityName, ProtectedEntityWriteRegistry.WriteVerb verb) {}
@@ -312,7 +417,8 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
             entityName, verb,
             writtenValues.keySet().toArray(String[]::new),
             writtenValues,
-            targetIdOf(dqlStatement, parameters));
+            targetIdOf(dqlStatement, parameters),
+            isUnboundedWrite(verb, dqlStatement));
         if (inspecting)
             ProtectedEntityWriteRegistry.notifyWriteInspected(request);
         if (!maybeProtected)

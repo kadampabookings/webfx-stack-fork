@@ -37,21 +37,35 @@ public final class ProtectedEntityWriteRegistry {
      * @param writtenValues those fields' values where they resolve to a scalar — an insert names its
      *                      owner here ({@code insert Document set person=$1}), which is how a new row's
      *                      ownership can be judged without a row existing to look up
-     * @param targetId      the id of the row being changed, when the statement selects one by primary
-     *                      key — and <b>null when it could not be determined</b>, which covers a delete
-     *                      or update whose WHERE is anything more interesting than {@code id = value}.
+     * @param targetId      the id of the row being changed, when an {@code id = value} test can be read
+     *                      out of the WHERE — either as the whole of it, or as one side of a conjunction
+     *                      — and <b>null when it could not be determined</b>, which covers every other
+     *                      shape: a disjunction, a subquery, a non-id predicate.
      *                      <p><b>Null is not "no constraint", it is "unknown".</b> A policy that decides
      *                      by ownership must DENY on null: a statement whose target this could not read
      *                      is precisely the statement that would be used to reach somebody else's row.
      *                      Reading null as "not applicable" would make the check optional at the
      *                      attacker's discretion.
+     * @param unbounded     true when this write names NO bound on which rows it touches: an update or a
+     *                      delete with no WHERE, or whose WHERE holds no equality or IN tying a column
+     *                      to a literal or a {@code $n}. {@code where true}, {@code where id = id} and
+     *                      {@code where id > 0} are all unbounded. Always false for an insert.
+     *                      <p>Distinct from a null {@code targetId}, and the difference is the one that
+     *                      matters: null there means "this could not be read", which is true of most
+     *                      set-based writes, including perfectly ordinary ones like
+     *                      {@code delete from ListItem where list = $1}. A rule built on that null
+     *                      refuses the honest statements along with the rest.
+     *                      <p><b>Bounded is not safe.</b> {@code where removed = $1} is bounded by this
+     *                      and can still match nearly every row. It is a floor under the statement that
+     *                      names no bound at all, not an answer to whose rows these are.
      */
     public record WriteRequest(
         String entityName,
         WriteVerb verb,
         String[] writtenFields,
         Map<String, Object> writtenValues,
-        Object targetId
+        Object targetId,
+        boolean unbounded
     ) {}
 
     @FunctionalInterface
