@@ -478,7 +478,8 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
                 writtenValues.keySet().toArray(String[]::new),
                 writtenValues,
                 targetIdOf(dqlStatement, row),
-                unbounded);
+                unbounded,
+                null); // this path judges one statement at a time, so there is no batch to name
             if (inspecting)
                 ProtectedEntityWriteRegistry.notifyWriteInspected(request);
             if (maybeProtected)

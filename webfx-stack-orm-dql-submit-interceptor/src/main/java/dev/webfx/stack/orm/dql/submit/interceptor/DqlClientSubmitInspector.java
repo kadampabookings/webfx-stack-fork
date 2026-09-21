@@ -109,7 +109,8 @@ final class DqlClientSubmitInspector implements ClientSubmitGuard.Inspector {
                 writtenValues.keySet().toArray(new String[0]),
                 writtenValues,
                 DqlSubmitInterceptorInitializer.targetIdOf(statement, row),
-                unbounded));
+                unbounded,
+                null)); // the batch, if there is one, is attached by ClientSubmitGuard.checkBatch
         }
         return ClientSubmitGuard.Inspection.allowedAll(writes);
     }

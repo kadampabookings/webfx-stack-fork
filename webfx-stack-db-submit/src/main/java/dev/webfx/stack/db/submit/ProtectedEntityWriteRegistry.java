@@ -69,11 +69,11 @@ public final class ProtectedEntityWriteRegistry {
         String[] batchInserts
     ) {
 
-        /** A write read on its own, with no batch around it to be told about. */
-        public WriteRequest(String entityName, WriteVerb verb, String[] writtenFields,
-                            Map<String, Object> writtenValues, Object targetId, boolean unbounded) {
-            this(entityName, verb, writtenFields, writtenValues, targetId, unbounded, null);
-        }
+        // NO SECOND CONSTRUCTOR. A convenience overload defaulting batchInserts to null would save the
+        // callers a `null` each, and it crashes the GWT compiler while it computes permutations — this
+        // module is compiled to JavaScript for both clients, and a record with more than one
+        // constructor is a shape it cannot handle. The callers pass null explicitly instead, which also
+        // makes "this write was judged outside a batch" something a reader sees at the call site.
 
         /** The same write, told what the batch around it inserts. */
         public WriteRequest withBatchInserts(String[] batchInserts) {
