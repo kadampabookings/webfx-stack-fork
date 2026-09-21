@@ -65,8 +65,40 @@ public final class ProtectedEntityWriteRegistry {
         String[] writtenFields,
         Map<String, Object> writtenValues,
         Object targetId,
-        boolean unbounded
-    ) {}
+        boolean unbounded,
+        String[] batchInserts
+    ) {
+
+        /** A write read on its own, with no batch around it to be told about. */
+        public WriteRequest(String entityName, WriteVerb verb, String[] writtenFields,
+                            Map<String, Object> writtenValues, Object targetId, boolean unbounded) {
+            this(entityName, verb, writtenFields, writtenValues, targetId, unbounded, null);
+        }
+
+        /** The same write, told what the batch around it inserts. */
+        public WriteRequest withBatchInserts(String[] batchInserts) {
+            return batchInserts == this.batchInserts ? this // the single-submit path, where both are null
+                : new WriteRequest(entityName, verb, writtenFields, writtenValues, targetId, unbounded, batchInserts);
+        }
+
+        /**
+         * What statement {@code index} of the enclosing batch INSERTS, or null when it inserts nothing, when the
+         * index names no statement, or when this write was judged outside a batch.
+         *
+         * <p>This exists because a value can name a row the same batch is creating rather than one that already
+         * exists — a {@code GeneratedKeyReference} — and a rule that accepts such a value has to know WHAT is
+         * being created there. Reading only "it is a reference" says the caller is pointing at some statement of
+         * its own batch, not that it is pointing at the kind of row the rule meant to allow; the batch is the
+         * caller's to compose, so the statement pointed at can be anything it likes.
+         *
+         * <p><b>Null is "unknown", as everywhere else here.</b> A single-statement submit has no batch, so every
+         * index is null and a rule that requires a particular entity refuses — which is right: a reference to a
+         * batch that does not exist resolves to nothing.
+         */
+        public String batchInsertAt(int index) {
+            return batchInserts == null || index < 0 || index >= batchInserts.length ? null : batchInserts[index];
+        }
+    }
 
     @FunctionalInterface
     public interface WriteAuthorizer {

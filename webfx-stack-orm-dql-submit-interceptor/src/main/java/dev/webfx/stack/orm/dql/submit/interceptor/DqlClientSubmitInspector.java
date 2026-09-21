@@ -16,6 +16,8 @@ import dev.webfx.stack.orm.expression.terms.ExpressionArray;
 import dev.webfx.stack.orm.expression.terms.Insert;
 import dev.webfx.stack.orm.expression.terms.Update;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -93,13 +95,23 @@ final class DqlClientSubmitInspector implements ClientSubmitGuard.Inspector {
                 }
             }
         }
-        // The same reading of fields, values and target the application's write authorizer is given
-        Map<String, Object> writtenValues = DqlSubmitInterceptorInitializer.writtenValuesOf(statement, parameters);
-        return ClientSubmitGuard.Inspection.allowed(new ProtectedEntityWriteRegistry.WriteRequest(
-            domainClass.getName(), verb,
-            writtenValues.keySet().toArray(new String[0]),
-            writtenValues,
-            DqlSubmitInterceptorInitializer.targetIdOf(statement, parameters),
-            DqlSubmitInterceptorInitializer.isUnboundedWrite(verb, statement)));
+        // The same reading of fields, values and target the application's write authorizer is given - once per
+        // ROW, because one argument can carry several (see parameterRowsOf).
+        List<Object[]> rows = DqlSubmitInterceptorInitializer.parameterRowsOf(parameters);
+        List<ProtectedEntityWriteRegistry.WriteRequest> writes = new ArrayList<>(rows.size());
+        // Row-invariant, so read once rather than once per row: both are properties of the statement.
+        String entityName = domainClass.getName();
+        boolean unbounded = DqlSubmitInterceptorInitializer.isUnboundedWrite(verb, statement);
+        for (Object[] row : rows) {
+            Map<String, Object> writtenValues = DqlSubmitInterceptorInitializer.writtenValuesOf(statement, row);
+            writes.add(new ProtectedEntityWriteRegistry.WriteRequest(
+                entityName, verb,
+                writtenValues.keySet().toArray(new String[0]),
+                writtenValues,
+                DqlSubmitInterceptorInitializer.targetIdOf(statement, row),
+                unbounded));
+        }
+        return ClientSubmitGuard.Inspection.allowedAll(writes);
     }
+
 }

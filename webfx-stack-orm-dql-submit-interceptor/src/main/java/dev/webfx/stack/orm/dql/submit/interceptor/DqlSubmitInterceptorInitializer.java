@@ -13,6 +13,7 @@ import dev.webfx.stack.db.datascope.schema.SchemaScope;
 import dev.webfx.stack.db.datascope.schema.SchemaScopeBuilder;
 import dev.webfx.stack.db.datasource.LocalDataSourceService;
 import dev.webfx.stack.db.submit.ClientSubmitGuard;
+import dev.webfx.stack.db.submit.GeneratedKeyReference;
 import dev.webfx.stack.db.submit.ProtectedEntityWriteRegistry;
 import dev.webfx.stack.db.submit.SubmitArgument;
 import dev.webfx.stack.db.submit.SubmitResult;
@@ -107,6 +108,33 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * so an entity whose fields are individually protected should also carry an entity-level rule, or a
      * statement this cannot read would slip past on a technicality.
      */
+    /**
+     * The rows of parameters one argument carries: one normally, several when the client's change set grouped
+     * identical statements and replaced their parameter arrays with a {@link Batch} of them
+     * ({@code EntityChangesToSubmitBatchGenerator.groupIdenticalStatements}).
+     *
+     * <p><b>Why this is not a detail.</b> Read as a single write, a grouped argument has no readable value at all:
+     * position 0 holds the Batch object and the rest are out of range, so every assignment resolves to null and so
+     * does the target. Rules that refuse on an unreadable value would then refuse the whole transaction, and rules
+     * that allow on the absence of a value would let every row through on the strength of a value none of them
+     * carries. Neither is a reading of what the client actually sent. One write per row is.
+     *
+     * <p>A row that is not an array of values is kept as null rather than dropped: it is a row this could not
+     * read, and the rules must be given the chance to refuse it rather than never being told it was there.
+     */
+    static java.util.List<Object[]> parameterRowsOf(Object[] parameters) {
+        if (parameters != null && parameters.length == 1 && parameters[0] instanceof Batch<?> grouped) {
+            Object[] array = grouped.getArray();
+            if (array != null && array.length > 0) {
+                java.util.List<Object[]> rows = new ArrayList<>(array.length);
+                for (Object row : array)
+                    rows.add(row instanceof Object[] values ? values : null);
+                return rows;
+            }
+        }
+        return java.util.Collections.singletonList(parameters);
+    }
+
     static java.util.Map<String, Object> writtenValuesOf(DqlStatement<Object> dqlStatement, Object[] parameters) {
         ExpressionArray<Object> setClause =
               dqlStatement instanceof Update ? ((Update<Object>) dqlStatement).getSetClause()
@@ -133,10 +161,37 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
 
     /**
      * One assignment's value, from what the parameter or constant carried: a boolean kept as a Boolean (a row rule may
-     * turn on one — whether a person is being made an account owner), a number or string as a string, anything else
-     * unknown (null).
+     * turn on one — whether a person is being made an account owner), a number or string as a string, a
+     * {@link GeneratedKeyReference} kept as itself (see below), anything else unknown (null).
+     *
+     * <p><b>Why the reference is the one non-scalar kept.</b> It carries something no scalar can: this value
+     * names a row THIS BATCH is creating, not one that already existed. That is the whole difference between
+     * a client attaching a recipient to the mail it just composed and one attaching a recipient to somebody
+     * else's mail that is still waiting to be sent — see {@code MailWritePolicy}.
+     *
+     * <p>It is kept rather than inferred from the null it used to collapse to, because a rule reading that
+     * null would be reading "this value could not be determined" as "this was a same-batch reference", and
+     * every other unreadable value lands there too. That is the same misreading {@link #targetIdOf} warns
+     * about for a null target, and it fails the same way round: open.
+     *
+     * <p>Strictly narrowing for the rules that already read this map. The one that tests for null,
+     * {@code GrantTableWritePolicy}'s "unassigns a role and nothing else", stops treating
+     * {@code set role = <a role this batch is inserting>} as an unassignment — which it never was.
      */
     private static Object writtenValueOf(Object raw) {
+        return raw instanceof GeneratedKeyReference ? raw : scalarValueOf(raw);
+    }
+
+    /**
+     * The scalar reading, used where a value can only sensibly be a scalar: a boolean as a Boolean, a number or
+     * string as a string, anything else unknown (null).
+     *
+     * <p>Kept separate from {@link #writtenValueOf} so that preserving a reference there does not quietly widen
+     * {@link ProtectedEntityWriteRegistry.WriteRequest#targetId()}, whose contract is "an id, or null when it
+     * could not be determined" and whose readers compare it, print it and bind it as a query parameter. A
+     * reference is precisely a value that is NOT an id yet, so it belongs on the null side of that contract.
+     */
+    private static Object scalarValueOf(Object raw) {
         if (raw instanceof Boolean)
             return raw;
         return raw instanceof Number || raw instanceof String ? String.valueOf(raw) : null;
@@ -232,7 +287,7 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
                 // The legacy "where id=?": its position is its order — see unnamedPositionsOf
                 UnnamedPositions unnamed = unnamedPositionsOf(dqlStatement);
                 return unnamed == null || unnamed.wherePosition() < 0 ? null
-                    : writtenValueOf(parameterAt(parameters, unnamed.wherePosition()));
+                    : scalarValueOf(parameterAt(parameters, unnamed.wherePosition()));
             }
             return DqlScopeUtil.resolveScalarValue(equals.getRight(), parameters);
         }
@@ -411,19 +466,27 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         DomainClass resolved = domainClass instanceof DomainClass ? (DomainClass) domainClass
             : dataSourceModel.getDomainModel().getClass(domainClass);
         String entityName = resolved.getName();
-        Object[] parameters = argument.getParameters();
-        java.util.Map<String, Object> writtenValues = writtenValuesOf(dqlStatement, parameters);
-        ProtectedEntityWriteRegistry.WriteRequest request = new ProtectedEntityWriteRegistry.WriteRequest(
-            entityName, verb,
-            writtenValues.keySet().toArray(String[]::new),
-            writtenValues,
-            targetIdOf(dqlStatement, parameters),
-            isUnboundedWrite(verb, dqlStatement));
-        if (inspecting)
-            ProtectedEntityWriteRegistry.notifyWriteInspected(request);
+        // One write per ROW, for the same reason the client guard reads them that way: a grouped argument read
+        // as a single write has no readable value at all, so the authorizer would be judging - and the inventory
+        // recording - a reading of nothing, once, for however many rows the client actually sent.
+        boolean unbounded = isUnboundedWrite(verb, dqlStatement); // row-invariant: it is a property of the WHERE
+        java.util.List<Future<Void>> checks = new ArrayList<>();
+        for (Object[] row : parameterRowsOf(argument.getParameters())) {
+            java.util.Map<String, Object> writtenValues = writtenValuesOf(dqlStatement, row);
+            ProtectedEntityWriteRegistry.WriteRequest request = new ProtectedEntityWriteRegistry.WriteRequest(
+                entityName, verb,
+                writtenValues.keySet().toArray(String[]::new),
+                writtenValues,
+                targetIdOf(dqlStatement, row),
+                unbounded);
+            if (inspecting)
+                ProtectedEntityWriteRegistry.notifyWriteInspected(request);
+            if (maybeProtected)
+                checks.add(ProtectedEntityWriteRegistry.checkWriteAllowed(request));
+        }
         if (!maybeProtected)
             return Future.succeededFuture(null);
-        return ProtectedEntityWriteRegistry.checkWriteAllowed(request)
+        return Future.all(new ArrayList<>(checks))
             .map(ignored -> new ProtectedWrite(entityName, verb));
     }
 

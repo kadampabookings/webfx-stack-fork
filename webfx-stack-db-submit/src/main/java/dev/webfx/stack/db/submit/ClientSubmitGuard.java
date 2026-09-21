@@ -58,16 +58,43 @@ public final class ClientSubmitGuard {
 
     /**
      * An inspector's reading of one statement: either why it must not run, or — when it may as far as the deny
-     * list goes — the write it makes, in the shape the application's {@link WritePolicy} judges. A statement that
+     * list goes — the writes it makes, in the shape the application's {@link WritePolicy} judges. A statement that
      * is not a write carries neither.
+     *
+     * <p><b>Writes, plural.</b> One statement is usually one write, but a client change set groups identical
+     * statements and sends one set of parameters per row in their place, so an argument can be several rows of
+     * one shape carrying different values. Each row is a write in its own right and is judged as one; reading
+     * such an argument as a single write reads none of the values the client actually sent.
      */
-    public record Inspection(String refusal, ProtectedEntityWriteRegistry.WriteRequest write) {
+    public record Inspection(String refusal, List<ProtectedEntityWriteRegistry.WriteRequest> writes) {
         public static Inspection refused(String refusal) {
             return new Inspection(refusal, null);
         }
 
         public static Inspection allowed(ProtectedEntityWriteRegistry.WriteRequest write) {
-            return new Inspection(null, write);
+            return new Inspection(null, write == null ? null : List.of(write));
+        }
+
+        /**
+         * One statement can carry SEVERAL writes: a client change set groups identical statements and sends one
+         * set of parameters per row, so a single argument is several rows of the same shape with different values.
+         * Each is judged in its own right, because a rule that read only the first would be deciding the rest on
+         * the strength of a row the caller chose to put first.
+         */
+        public static Inspection allowedAll(List<ProtectedEntityWriteRegistry.WriteRequest> writes) {
+            return new Inspection(null, writes == null || writes.isEmpty() ? null : writes);
+        }
+
+        /**
+         * The first write, for the callers that report or classify one statement at a time.
+         *
+         * <p>Only safe for what is the SAME for every row — the entity and the verb, which come from the
+         * statement. Anything read from parameters (values, the target id) belongs to row 0 alone, so judging on
+         * this would decide the other rows on the strength of whichever the caller put first: use
+         * {@link #writes()}.
+         */
+        public ProtectedEntityWriteRegistry.WriteRequest write() {
+            return writes == null || writes.isEmpty() ? null : writes.get(0);
         }
     }
 
@@ -131,7 +158,9 @@ public final class ClientSubmitGuard {
 
     /** Succeeds when this client write may run; fails with the refusal otherwise. Call on the caller's thread. */
     public static Future<Void> check(SubmitArgument argument) {
-        return decide(argument);
+        // No batch, so no statement for a generated-key reference to name: batchInserts stays null and a
+        // rule that requires one refuses, which is what a reference resolving to nothing deserves.
+        return decide(argument, false, null, null);
     }
 
     /**
@@ -142,18 +171,50 @@ public final class ClientSubmitGuard {
     public static Future<Void> checkBatch(Batch<SubmitArgument> batch) {
         if (batch == null || batch.getArray() == null)
             return refused(null, UNCHECKABLE_REFUSED);
+        SubmitArgument[] arguments = batch.getArray();
+        // Read every statement BEFORE judging any of them. A client composes its batch, so a value in one
+        // statement may name a row another statement of the same batch is creating rather than one that already
+        // exists - and what is being created there is only knowable by having read that statement. Inspecting is
+        // parsing and a deny-list lookup: no rows, no caller state, nothing that can fail differently per pass.
+        Inspection[] inspections = new Inspection[arguments.length];
+        // Separate from the array above, because an inspector may legitimately return null: without this, such a
+        // statement would be parsed again by decide() rather than being known to have been read already.
+        boolean[] inspected = new boolean[arguments.length];
+        String[] inserts = new String[arguments.length];
+        Inspector i = inspector;
+        for (int index = 0; index < arguments.length; index++) {
+            SubmitArgument argument = arguments[index];
+            if (i == null || argument == null || !"DQL".equalsIgnoreCase(argument.getLanguage())
+                || isIgnoredPreamble(argument)) // decide() discards it, so reading it here is wasted work
+                continue;
+            inspected[index] = true;
+            Inspection inspection = inspections[index] = safeInspect(i, argument);
+            ProtectedEntityWriteRegistry.WriteRequest write = inspection == null ? null : inspection.write();
+            // Every row of a grouped statement inserts the same entity, so the first row names it for all of them.
+            if (write != null && write.verb() == ProtectedEntityWriteRegistry.WriteVerb.INSERT)
+                inserts[index] = write.entityName();
+        }
         List<Future<Void>> decisions = new ArrayList<>();
-        for (SubmitArgument argument : batch.getArray())
-            decisions.add(decide(argument));
+        for (int index = 0; index < arguments.length; index++)
+            decisions.add(decide(arguments[index], inspected[index], inspections[index], inserts));
         return Future.all(new ArrayList<>(decisions)).map(ignored -> null);
     }
 
-    private static Future<Void> decide(SubmitArgument argument) {
+    /** An inspector that throws refuses; it does not abstain. */
+    private static Inspection safeInspect(Inspector inspector, SubmitArgument argument) {
+        try {
+            return inspector.inspect(argument);
+        } catch (Throwable e) {
+            Console.log("⚠️ Client write inspector failed — refusing the write: " + e);
+            return Inspection.refused(UNCHECKABLE_REFUSED);
+        }
+    }
+
+    private static Future<Void> decide(SubmitArgument argument, boolean alreadyInspected,
+                                       Inspection precomputed, String[] batchInserts) {
         if (argument == null)
             return refused(null, UNCHECKABLE_REFUSED);
-        // A preamble's statement is ignored and the server supplies its own — but only a provider that honours the
-        // flag ignores it, so one that arrives WITH a statement is not exempt: whatever it says is judged below.
-        if (argument.isTransactionPreamble() && (argument.getStatement() == null || argument.getStatement().isEmpty()))
+        if (isIgnoredPreamble(argument))
             return Future.succeededFuture();
         String language = argument.getLanguage();
         if (language == null || !"DQL".equalsIgnoreCase(language)) {
@@ -173,22 +234,43 @@ public final class ClientSubmitGuard {
             // by a client, or has rules about rows, but has nothing able to read a statement, must refuse rather
             // than let it through.
             return ClientWriteDenyList.isEmpty() && policy == null ? Future.succeededFuture() : refused(argument, UNCHECKABLE_REFUSED);
-        Inspection inspection;
-        try {
-            inspection = i.inspect(argument);
-        } catch (Throwable e) {
-            Console.log("⚠️ Client write inspector failed — refusing the write: " + e);
-            inspection = Inspection.refused(UNCHECKABLE_REFUSED);
-        }
+        Inspection inspection = alreadyInspected ? precomputed : safeInspect(i, argument);
         if (inspection == null)
             return refused(argument, UNCHECKABLE_REFUSED);
         if (inspection.refusal() != null)
             return refused(argument, inspection.refusal());
-        if (policy == null || inspection.write() == null)
+        List<ProtectedEntityWriteRegistry.WriteRequest> writes = inspection.writes();
+        if (policy == null || writes == null)
             return Future.succeededFuture();
+        List<Future<Void>> answers = new ArrayList<>();
+        for (ProtectedEntityWriteRegistry.WriteRequest write : writes)
+            answers.add(ask(argument, policy, write.withBatchInserts(batchInserts)));
+        return Future.all(new ArrayList<>(answers)).map(ignored -> null);
+    }
+
+    /**
+     * A preamble whose statement the server supplies itself, and therefore has nothing to judge. Only a provider
+     * that honours the flag ignores the client's statement, so one that arrives WITH a statement is not exempt:
+     * whatever it says is judged like any other.
+     */
+    private static boolean isIgnoredPreamble(SubmitArgument argument) {
+        return argument.isTransactionPreamble()
+               && (argument.getStatement() == null || argument.getStatement().isEmpty());
+    }
+
+    /**
+     * One write past one policy.
+     *
+     * <p>Asked once per row, and all rows at once: a policy may need a row lookup to answer, and it must read the
+     * caller's state before the first async hop, so the questions cannot be chained one after another. A grouped
+     * statement of N rows therefore puts N lookups in flight together — the honest cost of judging each row the
+     * client sent rather than judging the first and assuming the rest.
+     */
+    private static Future<Void> ask(SubmitArgument argument, WritePolicy policy,
+                                    ProtectedEntityWriteRegistry.WriteRequest write) {
         Future<String> answer;
         try {
-            answer = policy.refusalReason(inspection.write());
+            answer = policy.refusalReason(write);
         } catch (Throwable e) {
             answer = null;
         }
