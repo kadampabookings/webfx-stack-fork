@@ -260,9 +260,8 @@ public final class ClientSideStateSession {
 
     private void forceSendingClientStatesBackToServer(boolean includingSessionId) {
         nextUserIdSendingSequence =
-            nextRunIdSendingSequence =
-                nextBackofficeSendingSequence =
-                    -1;
+            nextBackofficeSendingSequence =
+                -1;
         if (includingSessionId)
             nextSessionIdSendingSequence = -1;
     }
@@ -330,18 +329,25 @@ public final class ClientSideStateSession {
     // Communicating the run id to the server (when it makes sense)
     // Note that the run id is actually not stored in the client session, but is a random constant value on the client side
 
-    private int nextRunIdSendingSequence = -1;
-
-    public Object setOutgoingRunIdIfNotYetSent(Object outgoingState) {
-        // When do we send the run to the server?
-        if (nextRunIdSendingSequence == -1) {
-            nextRunIdSendingSequence = serverIncomingMessageSequence;
-        }
-        if (nextRunIdSendingSequence == serverIncomingMessageSequence) {
-            String runId = getRunId();
-            outgoingState = StateAccessor.setRunId(outgoingState, runId, false);
-        }
-        return outgoingState;
+    /**
+     * Puts the run id on every outgoing message, like the identity token and unlike its other neighbours.
+     *
+     * <p>The others send once because the server REMEMBERS them. The server remembers this one too, but it also
+     * COMPARES it on every message, to decide whether the message belongs to the connection it already knows
+     * ({@code sameConnection} in {@code ServerSideStateSessionSyncer}). A message carrying no run id cannot
+     * match, so every message from a Java client looked like a new connection: the branch that skips work when
+     * nothing has changed never applied, and a client whose session had gone public was re-sent the public
+     * authorizations — a database read of the public operations — on every single message. The React clients
+     * resend all of their state every time and so never had this.
+     *
+     * <p>Cheap to repeat, and safe to: a short constant generated once per run, which the server COMPARES
+     * rather than trusts, travelling on a connection that already carried it. But it is not inert, so do not
+     * start treating it as a public value — the magic-link path pairs it with a redeemed token to establish
+     * that THIS client run is the one that redeemed the link ({@code loadMagicLinkRedeemedByThisSession}),
+     * which is the only authority the account-owner creation step has. A matching factor, not a secret.
+     */
+    public Object setOutgoingRunId(Object outgoingState) {
+        return StateAccessor.setRunId(outgoingState, getRunId(), false);
     }
 
     // Communicating the backoffice flag to the server (when it makes sense)
@@ -354,7 +360,10 @@ public final class ClientSideStateSession {
         if (nextBackofficeSendingSequence == -1) {
             nextBackofficeSendingSequence = serverIncomingMessageSequence;
         }
-        if (nextRunIdSendingSequence == serverIncomingMessageSequence) {
+        // Its OWN sequence. This read the run id's until 2026-09-21, which happened to fire at the same moments
+        // and so hid the mistake — until the run id stopped having a sequence at all. It is worth being exact
+        // about: this flag decides the session TIER, and so the idle window a staff session gets.
+        if (nextBackofficeSendingSequence == serverIncomingMessageSequence) {
             Boolean backoffice = isBackoffice();
             outgoingState = StateAccessor.setBackoffice(outgoingState, backoffice, false);
         }
