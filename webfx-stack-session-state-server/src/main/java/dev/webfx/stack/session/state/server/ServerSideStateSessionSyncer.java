@@ -583,6 +583,32 @@ public final class ServerSideStateSessionSyncer {
     private static long untokenedClaimLastLogMillis;
     /** One line a minute: enough to watch a tail shrink, few enough not to fill a disk while it does. */
     private static final long UNTOKENED_CLAIM_LOG_INTERVAL_MILLIS = 60_000;
+    /**
+     * The same reports, twelve times as often, while an alarm is raised — control 4's "raise logging on
+     * the identity path", and the whole of it.
+     *
+     * <p>LOUDER MEANS MORE OFTEN, NOT PER MESSAGE. Both figures below are aggregates on purpose, and the
+     * reasons are written beside them: a client echoes its token on every message, so per-message logging
+     * would report one stale tab as hundreds a minute and bury the signal an operator is reading for. An
+     * alarm does not make that untrue — it makes waiting a minute for the next line expensive. So the
+     * measure is unchanged and only the cadence moves, which keeps the numbers comparable with the ones
+     * either side of the alarm.
+     *
+     * <p>Matched to the alarm poll rather than chosen: five seconds is already how often every instance
+     * asks whether an alarm is in force, so this adds no timer and cannot report a posture staler than the
+     * one it is reporting under.
+     */
+    private static final long ALARM_LOG_INTERVAL_MILLIS = 5_000;
+
+    /** How often the identity-path counters report, which depends only on whether an alarm is in force. */
+    static long identityLogIntervalMillis(long nowMillis) {
+        return SecurityAlarm.isRaised(nowMillis) ? ALARM_LOG_INTERVAL_MILLIS : UNTOKENED_CLAIM_LOG_INTERVAL_MILLIS;
+    }
+
+    /** Says in the log why the cadence changed, so a reader is not left to infer it from the timestamps. */
+    private static String alarmSuffix(long nowMillis) {
+        return SecurityAlarm.isRaised(nowMillis) ? " [alarm raised]" : "";
+    }
 
     /**
      * Applies the flip to a message that claims an identity with nothing backing it.
@@ -599,12 +625,12 @@ public final class ServerSideStateSessionSyncer {
         StateAccessor.setUserId(clientState, LogoutUserId.LOGOUT_USER_ID);
         long now = System.currentTimeMillis();
         untokenedClaimsSinceLastLog++;
-        if (now - untokenedClaimLastLogMillis >= UNTOKENED_CLAIM_LOG_INTERVAL_MILLIS) {
+        if (now - untokenedClaimLastLogMillis >= identityLogIntervalMillis(now)) {
             untokenedClaimLastLogMillis = now;
             // The claimed identity is deliberately not logged: it is unproven by definition, so recording it
             // would write attacker-chosen values — plausibly someone else's user id — into the log.
             Console.log("🛡 Refused " + untokenedClaimsSinceLastLog + " identity claim(s) with no token"
-                        + " (webfx.stack.session.token.required is on)");
+                        + " (webfx.stack.session.token.required is on)" + alarmSuffix(now));
             untokenedClaimsSinceLastLog = 0;
         }
     }
@@ -633,14 +659,15 @@ public final class ServerSideStateSessionSyncer {
         if (expiredTokenSessionIds.size() < EXPIRED_TOKEN_SESSIONS_CAP)
             expiredTokenSessionIds.add(serverSessionId == null ? "" : serverSessionId);
         long now = System.currentTimeMillis();
-        if (now - expiredTokenLastLogMillis >= UNTOKENED_CLAIM_LOG_INTERVAL_MILLIS) {
+        if (now - expiredTokenLastLogMillis >= identityLogIntervalMillis(now)) {
             expiredTokenLastLogMillis = now;
             int sessions = expiredTokenSessionIds.size();
             expiredTokenSessionIds.clear();
             Console.log("🛡 " + sessions + (sessions >= EXPIRED_TOKEN_SESSIONS_CAP ? "+" : "") + " session(s)"
                         + " presented an expired identity token; the claim stands while"
                         + " webfx.stack.session.token.required is off. Each is a session that has outlived"
-                        + " its token, and a forced logout on the day that setting is turned on.");
+                        + " its token, and a forced logout on the day that setting is turned on."
+                        + alarmSuffix(now));
         }
     }
 
