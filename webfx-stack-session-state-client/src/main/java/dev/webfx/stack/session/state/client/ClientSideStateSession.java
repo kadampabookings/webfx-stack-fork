@@ -352,6 +352,13 @@ public final class ClientSideStateSession {
 
     // Communicating the backoffice flag to the server (when it makes sense)
     // Note that the backoffice flag is actually not stored in the client session, but is a constant value on the client side
+    //
+    // IT DECIDES MORE THAN ITS NAME SAYS, and one of the two is a session LIFETIME. Server-side this flag
+    // picks the session tier (SessionTokenService.tierForNewSession), whose idle windows are three hours
+    // for the back office and ninety days for the front. It also gates the back-office account check and
+    // whether a second factor is asked for at all. All three only ever TIGHTEN, so a value that fails to
+    // arrive, or arrives false, silently buys the looser half of each. Treat a change here as a change to
+    // how long a staff session lives.
 
     private int nextBackofficeSendingSequence = -1;
 
