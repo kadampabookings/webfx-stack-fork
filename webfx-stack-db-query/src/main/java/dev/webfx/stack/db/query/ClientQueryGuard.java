@@ -75,8 +75,15 @@ public final class ClientQueryGuard {
     private static String decide(QueryArgument argument) {
         if (argument == null)
             return UNCHECKABLE_REFUSED;
-        if (argument.getLanguage() == null)
+        if (argument.getLanguage() == null) {
+            // Refused here, before any inspector is consulted — so if anyone is watching client reads, this is
+            // the only place they can hear about this one. It is worth hearing: a client still sending raw SQL
+            // is exactly the traffic that "how much can the inventory not describe" is measuring, and an
+            // inventory silently missing it would describe a client's traffic as tidier than it is.
+            if (ClientReadInspectionRegistry.isInspectingRead())
+                ClientReadInspectionRegistry.notifyUndescribableStatement(argument.getStatement());
             return RAW_SQL_REFUSED;
+        }
         Inspector i = inspector;
         if (i == null)
             // Fail CLOSED once something has been declared secret: a deployment that says a column must never
