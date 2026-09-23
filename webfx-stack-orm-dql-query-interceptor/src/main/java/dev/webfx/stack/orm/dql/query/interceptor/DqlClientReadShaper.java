@@ -20,6 +20,10 @@ import dev.webfx.stack.orm.expression.terms.Or;
 import dev.webfx.stack.orm.expression.terms.ParameterReference;
 import dev.webfx.stack.orm.expression.terms.Select;
 import dev.webfx.stack.orm.expression.terms.Symbol;
+import dev.webfx.stack.orm.expression.terms.BinaryExpression;
+import dev.webfx.stack.orm.expression.terms.SelectExpression;
+import dev.webfx.stack.orm.expression.terms.UnaryExpression;
+import dev.webfx.stack.orm.expression.terms.TernaryExpression;
 import dev.webfx.stack.orm.expression.terms.Union;
 import dev.webfx.stack.orm.expression.terms.WithSelect;
 import dev.webfx.stack.orm.expression.terms.function.Call;
@@ -163,12 +167,23 @@ final class DqlClientReadShaper {
         if (kind == null) // an insert, update or delete sent to the query endpoint: not a read to describe
             return null;
         Set<String> tables = new TreeSet<>();
+        Set<String> constructs = new TreeSet<>();
         try {
             compileCollecting(dataSourceModel, parsed, compileExpressions, tables);
         } catch (RuntimeException e) {
             // It parsed and would not compile. The tables collected up to that point are a partial answer, and a
             // partial answer presented as a whole one is worse than none: report it as undescribable instead.
             return null;
+        }
+        try {
+            collectConstructs(parsed, constructs);
+        } catch (RuntimeException e) {
+            // Observing what a statement CONTAINS must not cost the record of it. A field body parsed lazily
+            // here can throw where the guard's own compile never touched it, and letting that escape lost the
+            // read entirely — recorded as neither a shape nor undescribable, and re-walked on every repeat
+            // because nothing was cached.
+            constructs.clear();
+            constructs.add("(constructs unreadable)");
         }
         List<Select<?>> branches = branchesOf(parsed);
         Facts guaranteed = acrossBranches(branches);
@@ -182,6 +197,7 @@ final class DqlClientReadShaper {
             guaranteed.fields().toArray(new String[0]),
             guaranteed.anyFields().toArray(new String[0]),
             guaranteed.functions().toArray(new String[0]),
+            constructs.toArray(new String[0]),
             guaranteed.binds(),
             hasWhere);
     }
@@ -223,6 +239,100 @@ final class DqlClientReadShaper {
             combined = combined == null ? branchFacts : combined.or(branchFacts);
         }
         return combined == null ? Facts.none() : combined;
+    }
+
+    /**
+     * Every expression kind the statement uses, across every clause of every branch.
+     *
+     * <p>Deliberately NOT the guarantees walk: that one descends conjunctions only, because it is establishing
+     * what a statement promises. This one descends everything, because it is establishing what a statement
+     * CONTAINS — the question a restricted dialect has to be defined against.
+     *
+     * <p>An unrecognised node has its class name recorded and its children left unvisited. Recording it is the
+     * whole point: the list of constructs nobody anticipated is the output.
+     */
+    private static void collectConstructs(DqlStatement<?> parsed, Set<String> into) {
+        if (parsed == null)
+            return;
+        into.add(parsed.getClass().getSimpleName());
+        if (parsed instanceof Union<?> union) {
+            collectConstructs(union.getFirstSelect(), into);
+            for (Object[] branch : union.getUnions())
+                if (branch != null && branch.length > 1 && branch[1] instanceof Select<?> s)
+                    collectConstructs(s, into);
+            collectExpressionConstructs(union.getOrderBy(), into);
+            return;
+        }
+        if (parsed instanceof WithSelect<?> with) {
+            for (Object[] cte : with.getCtes())
+                if (cte != null)
+                    for (Object element : cte)
+                        if (element instanceof Select<?> s)
+                            collectConstructs(s, into);
+            collectConstructs(with.getMainSelect(), into);
+            return;
+        }
+        if (!(parsed instanceof Select<?> select))
+            return;
+        List<Object[]> from = select.getAdditionalFromEntities(), laterals = select.getLateralSubqueries();
+        if (from != null && !from.isEmpty())
+            into.add("+additionalFrom");
+        if (laterals != null && !laterals.isEmpty()) {
+            into.add("+lateral");
+            for (Object[] lateral : laterals)
+                if (lateral != null)
+                    for (Object element : lateral)
+                        if (element instanceof Select<?> s)
+                            collectConstructs(s, into);
+        }
+        for (Expression<?> clause : new Expression<?>[] {
+                select.getFields(), select.getWhere(), select.getGroupBy(), select.getHaving(),
+                select.getOrderBy(), select.getLimit(), select.getOffset() })
+            collectExpressionConstructs(clause, into);
+    }
+
+    private static void collectExpressionConstructs(Expression<?> expression, Set<String> into) {
+        if (expression == null)
+            return;
+        into.add(expression.getClass().getSimpleName());
+        if (expression instanceof SelectExpression<?> subquery) {
+            collectConstructs(subquery.getSelect(), into);
+            return;
+        }
+        if (expression instanceof Call<?> call) {
+            collectExpressionConstructs(call.getOperand(), into);
+            collectExpressionConstructs(call.getOrderBy(), into); // `f(x order by …)`, which the grammar allows
+            return;
+        }
+        if (expression instanceof Symbol<?> symbol) {
+            collectExpressionConstructs(symbol.getExpression(), into);
+            return;
+        }
+        if (expression instanceof BinaryExpression<?> binary) {
+            collectExpressionConstructs(binary.getLeft(), into);
+            collectExpressionConstructs(binary.getRight(), into);
+            return;
+        }
+        if (expression instanceof UnaryExpression<?> unary) {
+            collectExpressionConstructs(unary.getOperand(), into);
+            return;
+        }
+        if (expression instanceof ExpressionArray<?> array) {
+            Expression<?>[] elements = array.getExpressions();
+            if (elements != null)
+                for (Expression<?> element : elements)
+                    collectExpressionConstructs(element, into);
+            return;
+        }
+        // A ternary is not a Unary or a Binary, so its three operands are reached only by naming it — and a
+        // subquery hiding in one of its branches is exactly what this walk exists to surface.
+        if (expression instanceof TernaryExpression<?> ternary) {
+            collectExpressionConstructs(ternary.getQuestion(), into);
+            collectExpressionConstructs(ternary.getYes(), into);
+            collectExpressionConstructs(ternary.getNo(), into);
+            return;
+        }
+        // anything else: its own name is recorded above, and its children are not walked
     }
 
     /** The compilation the guard performs, with the collecting reader in place of the denying one. */

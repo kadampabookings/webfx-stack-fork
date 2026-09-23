@@ -84,6 +84,16 @@ public final class ClientReadInspectionRegistry {
      *                      in an argument, in only one side of an OR, in one branch of a union, or in the select
      *                      list is not here, because none of those restricts every row returned. Reported
      *                      unjudged: this module does not know which names mean ownership, and should not
+     * @param constructs    the DISTINCT expression kinds the statement uses, by their term class name, from a
+     *                      walk of every clause. Not a judgement: the point is to learn which of the grammar's
+     *                      ~59 term classes clients actually send, so that a restricted dialect can be defined
+     *                      from observation rather than from reading the front-end source. A class this walk
+     *                      does not recognise is RECORDED rather than refused — an unanticipated construct is
+     *                      exactly what this exists to surface, and the only place in this work where "unknown"
+     *                      is data rather than a refusal.
+     *                      <p>Static extraction cannot answer the same question: it misses everything composed
+     *                      at runtime, and it cannot see the Java clients at all, which build statements
+     *                      programmatically rather than as text
      * @param hasWhere      whether every branch has a WHERE at all. Separate from {@code bounded} on purpose:
      *                      {@code where true} has a WHERE and guarantees nothing, and an inventory describing
      *                      what clients send is worth telling those apart
@@ -95,6 +105,7 @@ public final class ClientReadInspectionRegistry {
         String[] boundFields,
         String[] alternativeFields,
         String[] guardFunctions,
+        String[] constructs,
         boolean bounded,
         boolean hasWhere
     ) {
