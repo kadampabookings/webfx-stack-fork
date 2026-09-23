@@ -65,27 +65,37 @@ public final class ClientReadInspectionRegistry {
      *                      by loading its target's default fields. Taken from the compiler's own requests for the
      *                      domain model rather than from the statement's text, for the reason the denying reader
      *                      gives: what reaches SQL is the only thing that cannot be rephrased
-     * @param boundFields   the field paths the statement GUARANTEES are tied to a value — an equality or an IN,
-     *                      with a column on one side and a literal or a {@code $n} on the other, reachable
-     *                      through conjunctions only, and intersected across a union's branches.
+     * @param boundFields   the field paths tied to a value in EVERY alternative — an equality or an IN, with a
+     *                      column on one side and a literal or a {@code $n} on the other.
      *                      <p><b>A bound field is not a scoped query.</b> {@code where removed = $1} appears here
      *                      and matches nearly every row. This says which columns COULD carry a scope, not that
      *                      any of them does
+     * @param alternativeFields the field paths tied to a value in at least one alternative. Read together with
+     *                      {@code bounded}: where that is true and {@code boundFields} is empty, these are what
+     *                      the statement is scoped by, spread across its branches. The front office's orders
+     *                      union is exactly that — one branch binds {@code person.frontendAccount} and the other
+     *                      {@code person.accountPerson.frontendAccount}, so no field is bound in both and the
+     *                      statement is scoped to one account all the same
+     * @param bounded       whether the rows are constrained at all. <b>Not derivable from {@code boundFields}</b>,
+     *                      which is the whole reason it is here: two branches can each bind and share no field.
+     *                      An AND is bounded when either side binds; an OR or a union only when every side does
      * @param guardFunctions the names of functions used as a boolean CONJUNCT — the position a domain-specific
-     *                      ownership predicate occupies — guaranteed across a union's branches. A function name
-     *                      appearing in an argument, behind an OR, or in the select list is not here, because
-     *                      none of those restricts a row. Reported unjudged: this module does not know which
-     *                      names mean ownership, and should not
-     * @param hasWhere      whether every branch has a WHERE at all. Separate from an empty {@code boundFields}
-     *                      on purpose: {@code where true} has a WHERE and guarantees nothing, and the two are
-     *                      worth telling apart in an inventory describing what clients send
+     *                      ownership predicate occupies — holding on EVERY alternative. A function name appearing
+     *                      in an argument, in only one side of an OR, in one branch of a union, or in the select
+     *                      list is not here, because none of those restricts every row returned. Reported
+     *                      unjudged: this module does not know which names mean ownership, and should not
+     * @param hasWhere      whether every branch has a WHERE at all. Separate from {@code bounded} on purpose:
+     *                      {@code where true} has a WHERE and guarantees nothing, and an inventory describing
+     *                      what clients send is worth telling those apart
      */
     public record ReadShape(
         String entityName,
         String statementKind,
         String[] touchedTables,
         String[] boundFields,
+        String[] alternativeFields,
         String[] guardFunctions,
+        boolean bounded,
         boolean hasWhere
     ) {
         // NO SECOND CONSTRUCTOR. A convenience overload would save callers a couple of empty arrays, and it

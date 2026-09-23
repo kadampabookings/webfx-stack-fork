@@ -16,6 +16,7 @@ import dev.webfx.stack.orm.expression.terms.Equals;
 import dev.webfx.stack.orm.expression.terms.ExpressionArray;
 import dev.webfx.stack.orm.expression.terms.IdExpression;
 import dev.webfx.stack.orm.expression.terms.In;
+import dev.webfx.stack.orm.expression.terms.Or;
 import dev.webfx.stack.orm.expression.terms.ParameterReference;
 import dev.webfx.stack.orm.expression.terms.Select;
 import dev.webfx.stack.orm.expression.terms.Symbol;
@@ -41,27 +42,38 @@ import java.util.TreeSet;
  * from it, and it swallows everything it cannot read. A description that could fail a query would make turning
  * observation on a change of behaviour, which is the one thing step 0 must not be.
  *
- * <h3>What "bound" means here, and the three ways it could lie</h3>
+ * <h3>What "bound" means here: intersection of rows versus union of rows</h3>
  *
  * <p>Everything below reports what a statement GUARANTEES about the rows it can return, never what it merely
- * mentions. Three asymmetries follow from that, and each was a defect before it was a rule:
+ * mentions. One rule generates the rest, and it is the only one worth remembering: <b>a conjunction narrows the
+ * rows, an alternative widens them</b>, so
  *
  * <ul>
- *   <li><b>Conjunctions are descended, disjunctions are not.</b> {@code A and B} matches at most the rows
- *       {@code A} alone would, so a binding conjunct binds the whole of it. {@code A or B} matches at least
- *       those and possibly every row, so {@code person = $1 or true} guarantees nothing while looking exactly
- *       like a scoped query. This applies to FUNCTION names as much as to fields: an ownership predicate behind
- *       an OR is not an ownership predicate, and reporting one would file the most dangerous shape there is as
- *       a safe one.</li>
- *   <li><b>A union guarantees only what EVERY branch guarantees.</b> A union returns the rows of all its
- *       branches, so {@code select … where person = $1 union select … from Document} is unscoped however tightly
- *       its first branch is written. Branch facts are therefore INTERSECTED. {@link Union} exposes no
- *       statement-level WHERE for exactly this reason, and its own comment warns that taking the first branch's
- *       would mislead a consumer — this is that consumer.</li>
- *   <li><b>A guard is a function in CONJUNCT position</b>, not a function anywhere. {@code accountCanAccess…(…)}
- *       as a conjunct restricts the rows; the same name inside an argument, a disjunction or a select list does
- *       not.</li>
+ *   <li><b>AND is satisfied by ANY side.</b> {@code A and B} matches at most the rows {@code A} alone would, so
+ *       one binding conjunct binds the whole of it.</li>
+ *   <li><b>OR and UNION need EVERY side.</b> {@code A or B} matches the rows of both, so it guarantees something
+ *       only if both sides do. {@code id = $1 or true} guarantees nothing; {@code id = $1 or parent = $1}
+ *       guarantees plenty, and reporting THAT as unconstrained is the mistake this paragraph exists to prevent.
+ *       A union is the same operation spelled differently, and is treated identically.</li>
  * </ul>
+ *
+ * <p><b>Bounded is a property of the statement; a bound FIELD is a property shared by every alternative.</b>
+ * The two come apart, which is why they are reported separately. The front office expands
+ * {@code accountCanAccessPersonOrders($1, person)} into a union by hand, because the macro's OR spans two person
+ * rows and defeats every index: one branch binds {@code person.frontendAccount}, the other
+ * {@code person.accountPerson.frontendAccount}. No single field is bound in both, and the statement is
+ * nonetheless scoped to one account. Reporting only the intersection called the orders page unconstrained — and
+ * an enforcement rule written from that would have refused the codebase's own documented performance pattern.
+ *
+ * <p>A guard is a function in CONJUNCT position and must hold on EVERY alternative, for the same reason: an
+ * ownership predicate in one branch of an OR leaves the other branch returning whatever it likes. A guard is
+ * reported but never treated as constraining the rows, because whether a name means "scoped" cannot be known
+ * from here — {@code searchMatchesPerson(p)} sits in the same position as an ownership predicate and scans the
+ * table. The application is asked instead, which is the division this module draws everywhere else.
+ *
+ * <p>What is deliberately NOT read as binding: {@code x in (select …)}. A subquery can select anything, so it
+ * bounds nothing this can verify. That leaves such a statement described as unconstrained when in practice it is
+ * not — the safe direction, and the one case where the conservative answer is kept on purpose.
  *
  * @author Claude Code
  */
@@ -69,8 +81,68 @@ final class DqlClientReadShaper {
 
     private DqlClientReadShaper() {}
 
-    /** The facts one branch of a statement guarantees about its rows. */
-    private record BranchFacts(Set<String> boundFields, Set<String> guardFunctions, boolean hasWhere) {}
+    /**
+     * What one expression, branch or statement guarantees about the rows it returns.
+     *
+     * @param fields      bound in EVERY alternative — what the statement guarantees whichever branch a row came
+     *                    through
+     * @param anyFields   bound in at least one alternative. Only meaningful alongside {@code binds}: with it,
+     *                    these are the fields the statement is scoped by, spread across its branches
+     * @param functions   guards holding on EVERY alternative
+     * @param binds       whether a FIELD is tied to a value — the question {@code fields} cannot answer on its
+     *                    own, because two branches can each bind and share no field. Deliberately not set by a
+     *                    function guard: see {@code factsOf}
+     */
+    private record Facts(Set<String> fields, Set<String> anyFields, Set<String> functions, boolean binds) {
+
+        static Facts none() {
+            return new Facts(new TreeSet<>(), new TreeSet<>(), new TreeSet<>(), false);
+        }
+
+        /** AND: the rows are the intersection, so either side binding binds the whole. */
+        Facts and(Facts other) {
+            return new Facts(union(fields, other.fields), alternatives(this, other),
+                             union(functions, other.functions), binds || other.binds);
+        }
+
+        /** OR and UNION: the rows are the union, so a guarantee survives only if BOTH sides make it. */
+        Facts or(Facts other) {
+            return new Facts(intersection(fields, other.fields), alternatives(this, other),
+                             intersection(functions, other.functions), binds && other.binds);
+        }
+
+        /**
+         * The fields that actually tie rows down, taken only from sides that DO.
+         *
+         * <p>A side that binds nothing contributes no alternatives, and the guard is the point rather than an
+         * optimisation. The front office's past-orders query carries
+         * {@code (event.vodExpirationDate==null or event.vodExpirationDate < now())} — an OR whose second side
+         * is a comparison, so the whole of it binds nothing. Merging its fields regardless put
+         * {@code event.vodExpirationDate} into the {@code any-of} list, which an operator is told is "what the
+         * statement is scoped by". It is a VOD window, it scopes nothing, and crediting a branch with a scope
+         * it does not have is the permissive direction — the one this whole model exists to avoid.
+         */
+        private static Set<String> alternatives(Facts left, Facts right) {
+            Set<String> r = new TreeSet<>();
+            if (left.binds)
+                r.addAll(left.anyFields);
+            if (right.binds)
+                r.addAll(right.anyFields);
+            return r;
+        }
+
+        private static Set<String> union(Set<String> a, Set<String> b) {
+            Set<String> r = new TreeSet<>(a);
+            r.addAll(b);
+            return r;
+        }
+
+        private static Set<String> intersection(Set<String> a, Set<String> b) {
+            Set<String> r = new TreeSet<>(a);
+            r.retainAll(b);
+            return r;
+        }
+    }
 
     /**
      * The shape of this statement, or null when it could not be described.
@@ -99,14 +171,19 @@ final class DqlClientReadShaper {
             return null;
         }
         List<Select<?>> branches = branchesOf(parsed);
-        BranchFacts guaranteed = intersect(branches);
+        Facts guaranteed = acrossBranches(branches);
+        boolean hasWhere = !branches.isEmpty();
+        for (Select<?> branch : branches)
+            hasWhere &= branch != null && branch.getWhere() != null;
         return new ReadShape(
             entityNameOf(dataSourceModel, branches.isEmpty() ? null : branches.get(0)),
             kind,
             tables.toArray(new String[0]),
-            guaranteed.boundFields().toArray(new String[0]),
-            guaranteed.guardFunctions().toArray(new String[0]),
-            guaranteed.hasWhere());
+            guaranteed.fields().toArray(new String[0]),
+            guaranteed.anyFields().toArray(new String[0]),
+            guaranteed.functions().toArray(new String[0]),
+            guaranteed.binds(),
+            hasWhere);
     }
 
     /**
@@ -131,26 +208,21 @@ final class DqlClientReadShaper {
         return branches;
     }
 
-    /** What every branch guarantees — so one unconstrained branch leaves the statement guaranteeing nothing. */
-    private static BranchFacts intersect(List<Select<?>> branches) {
-        Set<String> fields = null, functions = null;
-        boolean hasWhere = !branches.isEmpty();
+    /**
+     * What every branch guarantees.
+     *
+     * <p>A union is an OR spelled across statements, so it combines exactly as one: one unconstrained branch
+     * leaves the whole statement guaranteeing nothing, and a field counts as bound only where every branch
+     * binds it.
+     */
+    private static Facts acrossBranches(List<Select<?>> branches) {
+        Facts combined = null;
         for (Select<?> branch : branches) {
-            Set<String> branchFields = new TreeSet<>(), branchFunctions = new TreeSet<>();
-            Expression<?> where = branch == null ? null : branch.getWhere();
-            collectGuarantees(where, "", branchFields, branchFunctions,
-                              branch == null ? null : branch.getDomainClassAlias());
-            hasWhere &= where != null;
-            if (fields == null) {
-                fields = branchFields;
-                functions = branchFunctions;
-            } else {
-                fields.retainAll(branchFields);
-                functions.retainAll(branchFunctions);
-            }
+            Facts branchFacts = branch == null ? Facts.none()
+                : factsOf(branch.getWhere(), "", branch.getDomainClassAlias());
+            combined = combined == null ? branchFacts : combined.or(branchFacts);
         }
-        return new BranchFacts(fields == null ? new TreeSet<>() : fields,
-                               functions == null ? new TreeSet<>() : functions, hasWhere);
+        return combined == null ? Facts.none() : combined;
     }
 
     /** The compilation the guard performs, with the collecting reader in place of the denying one. */
@@ -182,62 +254,71 @@ final class DqlClientReadShaper {
     }
 
     /**
-     * What one WHERE guarantees: the field paths it ties to a value, and the functions it uses as guards.
+     * What one expression guarantees: the field paths it ties to a value, and the functions it uses as guards.
      *
-     * <p>Descends conjunctions and the {@code fk.(…)} form, and nothing else. The prefix carries the dot path
-     * accumulated on the way in, so {@code document.(event = $1)} is recorded as {@code document.event} rather
-     * than as a bare {@code event} that could belong to any table in the statement.
+     * <p>The prefix carries the dot path accumulated on the way in, so {@code document.(event = $1)} is recorded
+     * as {@code document.event} rather than as a bare {@code event} that could belong to any table.
      *
      * <p>Paths and never values: {@code cart.uuid}, not the uuid. The uuid is a capability and the address in
      * {@code lower(email) = $1} is somebody's; neither belongs in an inventory, and the column name answers the
      * question an inventory is asking anyway.
      */
-    private static void collectGuarantees(Expression<?> where, String prefix,
-                                          Set<String> fields, Set<String> functions, String rootAlias) {
+    private static Facts factsOf(Expression<?> where, String prefix, String rootAlias) {
         if (where == null)
-            return;
-        if (where instanceof And<?> and) {
-            collectGuarantees(and.getLeft(), prefix, fields, functions, rootAlias);
-            collectGuarantees(and.getRight(), prefix, fields, functions, rootAlias);
-            return;
-        }
+            return Facts.none();
+        if (where instanceof And<?> and)
+            return factsOf(and.getLeft(), prefix, rootAlias).and(factsOf(and.getRight(), prefix, rootAlias));
+        if (where instanceof Or<?> or)
+            return factsOf(or.getLeft(), prefix, rootAlias).or(factsOf(or.getRight(), prefix, rootAlias));
         if (where instanceof Dot<?> dot) {
             // `fk.(a and b)` — the left is the path, the right is a condition on the target. Any other dot is a
             // column reference, which the equality cases below read.
             String left = pathOf(dot.getLeft(), rootAlias);
-            if (left != null)
-                collectGuarantees(dot.getRight(), left.isEmpty() ? prefix : prefix + left + ".",
-                                  fields, functions, rootAlias);
-            return;
+            return left == null ? Facts.none()
+                : factsOf(dot.getRight(), left.isEmpty() ? prefix : prefix + left + ".", rootAlias);
         }
         if (where instanceof Call<?> call) {
             // A function in CONJUNCT position is a boolean guard on the rows — which is where an ownership
             // predicate lives. Its arguments are deliberately not descended: a guard inside an argument guards
             // nothing.
+            //
+            // It is reported, and it does NOT set `binds`. The two are different claims and only one of them
+            // can be made from here: that a function restricts the rows is unknowable to this module, which
+            // sees a name. `searchMatchesPerson(p)` is a live client search condition and scans the table when
+            // the search term is empty; counting it as binding filed a table-wide scan as constrained, which is
+            // the direction an inventory must never err in. Whether a given name means "scoped" is the
+            // application's to say, and `functions` is how it is asked.
             String name = call.getFunctionName();
-            if (name != null && !name.isEmpty())
-                functions.add(name);
-            return;
+            if (name == null || name.isEmpty())
+                return Facts.none();
+            Set<String> functions = new TreeSet<>();
+            functions.add(name);
+            return new Facts(new TreeSet<>(), new TreeSet<>(), functions, false);
         }
         if (where instanceof Equals<?> equals) {
-            addIfBinding(equals.getLeft(), equals.getRight(), prefix, fields, rootAlias);
-            addIfBinding(equals.getRight(), equals.getLeft(), prefix, fields, rootAlias);
-            return;
+            String path = bindingPath(equals.getLeft(), equals.getRight(), prefix, rootAlias);
+            if (path == null)
+                path = bindingPath(equals.getRight(), equals.getLeft(), prefix, rootAlias);
+            return path == null ? Facts.none() : boundTo(path);
         }
         if (where instanceof In<?> in && isValueList(in.getRight())) {
             String path = pathOf(in.getLeft(), rootAlias);
-            if (path != null && !path.isEmpty())
-                fields.add(prefix + path);
+            return path == null || path.isEmpty() ? Facts.none() : boundTo(prefix + path);
         }
+        return Facts.none();
     }
 
-    private static void addIfBinding(Expression<?> column, Expression<?> value, String prefix, Set<String> into,
-                                     String rootAlias) {
+    private static Facts boundTo(String path) {
+        Set<String> fields = new TreeSet<>();
+        fields.add(path);
+        return new Facts(fields, new TreeSet<>(fields), new TreeSet<>(), true);
+    }
+
+    private static String bindingPath(Expression<?> column, Expression<?> value, String prefix, String rootAlias) {
         if (!isValue(value))
-            return;
+            return null;
         String path = pathOf(column, rootAlias);
-        if (path != null && !path.isEmpty())
-            into.add(prefix + path);
+        return path == null || path.isEmpty() ? null : prefix + path;
     }
 
     /**

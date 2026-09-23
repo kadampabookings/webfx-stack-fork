@@ -60,7 +60,7 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
      * not recompiled on every occurrence. Compared by identity and never passed to anyone.
      */
     private static final ReadShape UNDESCRIBABLE =
-        new ReadShape(null, null, new String[0], new String[0], new String[0], false);
+        new ReadShape(null, null, new String[0], new String[0], new String[0], new String[0], false, false);
 
     @Override
     public String refusalReason(QueryArgument argument) {
