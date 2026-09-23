@@ -26,9 +26,27 @@ import dev.webfx.stack.orm.expression.Expression;
 final class DenyingCompilerDomainModelReader implements CompilerDomainModelReader {
 
     private final CompilerDomainModelReader delegate;
+    /**
+     * How many times the statement reached a column that may be TESTED but not read — see
+     * {@link ClientReadDenyList#denyColumnExceptEqualityMatch}. Recorded rather than refused, because whether
+     * the reaching was legitimate is a question about WHERE in the statement it happened, and this reader is
+     * context-free by design. {@link CapabilityColumnWalk} answers it; this only raises it.
+     *
+     * <p><b>A count and not a flag, and that distinction is the whole control.</b> The walk reads the statement
+     * and this reads what the compiler emits, and the two come apart — a fields group, a field defined as an
+     * expression and a bare foreign key's default fields all put a column into the SQL without it appearing in
+     * the statement. A flag could only ever say "at least one", so a statement carrying ONE legitimate test
+     * licensed every hidden read beside it. Counting lets the two be required to AGREE, which closes the class
+     * rather than each construct in it.
+     */
+    private int capabilityColumnHits;
 
     DenyingCompilerDomainModelReader(CompilerDomainModelReader delegate) {
         this.delegate = delegate;
+    }
+
+    int capabilityColumnHits() {
+        return capabilityColumnHits;
     }
 
     @Override
@@ -52,6 +70,12 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
     public String getSymbolSqlColumnName(Object symbolDomainClass, Expression symbol) {
         String column = delegate.getSymbolSqlColumnName(symbolDomainClass, symbol);
         String table = tableOf(symbolDomainClass, symbol);
+        // Asked FIRST, because isColumnDenied answers true for these too — deliberately, so that a consumer
+        // which has not learned about the third category refuses one rather than handing it over.
+        if (ClientReadDenyList.isCapabilityColumn(table, column)) {
+            capabilityColumnHits++;
+            return column;
+        }
         if (ClientReadDenyList.isColumnDenied(table, column))
             throw new ClientReadDeniedException(table, column);
         return column;

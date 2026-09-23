@@ -168,7 +168,7 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
     /** The dispatch DataSourceModel.compileSelectOrWithSelect performs, with the denying reader in place. */
     // Package-private so the check can drive the exact compilation the inspector uses, against a real domain model.
     static void compileForClient(DataSourceModel dataSourceModel, String statement, boolean compileExpressions) {
-        CompilerDomainModelReader reader = new DenyingCompilerDomainModelReader(dataSourceModel.getCompilerDomainModelReader());
+        DenyingCompilerDomainModelReader reader = new DenyingCompilerDomainModelReader(dataSourceModel.getCompilerDomainModelReader());
         DbmsSqlSyntax syntax = dataSourceModel.getDbmsSqlSyntax();
         DqlStatement<?> parsed = dataSourceModel.parseStatement(statement);
         if (parsed instanceof WithSelect<?> withSelect)
@@ -181,5 +181,10 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
             // An insert, update or delete sent to the QUERY endpoint. The real path would fail casting it; this
             // refuses it on purpose instead of relying on that.
             throw new IllegalArgumentException("Only a select may be sent as a query");
+        // The reader has found a column that may be TESTED but not read. Whether the finding was legitimate is a
+        // question about where in the statement it happened, which the reader cannot see and the walk can.
+        int capabilityHits = reader.capabilityColumnHits();
+        if (capabilityHits > 0 && CapabilityColumnWalk.refusalFor(parsed, capabilityHits) != null)
+            throw new ClientReadDeniedException("a capability column", null);
     }
 }
