@@ -129,6 +129,28 @@ public final class ClientReadInspectionRegistry {
         void onRead(ReadShape shape);
 
         /**
+         * A client read a column declared with {@code observeColumnExceptEqualityMatch} — watched, not refused.
+         *
+         * <p>What the enforced rule would have refused, reported instead. It exists so that restoring the
+         * enforced rule can be a measurement rather than a date: the refusal used to BE the detection, so
+         * pausing one removed the only way to tell whether the clients still sending the old statement had
+         * gone, and switching it back on to find out costs another round of broken links.
+         *
+         * <p>The statement arrives with its literals already masked, and the columns are names out of the
+         * domain model. A capability token is a secret, and the point of this is to stop handing it out — so
+         * the VALUE never reaches here, only the fact that somebody read one.
+         *
+         * @param maskedStatement the statement, literals masked
+         * @param columns         the watched columns the compiled SQL reached, as {@code table.column}
+         * @param unanalysable    the walk met a construct it does not recognise, so this is "cannot say"
+         *                        rather than "was read". Kept apart because they mean opposite things to the
+         *                        decision this feeds: a read says wait, an unanalysable statement says look at
+         *                        it. Lumped together, one unhandled construct pins the count above zero for
+         *                        ever and the enforced rule can never be restored
+         */
+        default void onObservedCapabilityColumnRead(String maskedStatement, String[] columns, boolean unanalysable) {}
+
+        /**
          * A statement the inspector was interested in and that could not be described — it did not parse, it did
          * not compile, or it was not a select at all.
          *
@@ -174,6 +196,18 @@ public final class ClientReadInspectionRegistry {
         if (currentInspector != null) {
             try {
                 currentInspector.onRead(shape);
+            } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /** Never throws into the caller, for the same reason as {@link #notifyRead}. */
+    public static void notifyObservedCapabilityColumnRead(String statement, String[] columns, boolean unanalysable) {
+        ReadInspector currentInspector = inspector;
+        if (currentInspector != null) {
+            try {
+                currentInspector.onObservedCapabilityColumnRead(
+                    statement == null ? "(none)" : ClientQueryGuard.maskLiterals(statement), columns, unanalysable);
             } catch (Throwable ignored) {
             }
         }

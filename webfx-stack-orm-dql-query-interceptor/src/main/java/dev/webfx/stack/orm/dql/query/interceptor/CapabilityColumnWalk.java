@@ -75,16 +75,62 @@ final class CapabilityColumnWalk {
      * rather than the three constructs — a fourth would be caught by the same invariant on the day it is added.
      */
     static String refusalFor(DqlStatement<?> parsed, int columnsReachedInSql) {
-        Sanctioned sanctioned = new Sanctioned();
-        String refusal = statement(parsed, sanctioned);
-        if (refusal != null)
-            return refusal;
-        return sanctioned.count == columnsReachedInSql ? null : unreadable();
+        return refusalFor(parsed, columnsReachedInSql, false);
     }
 
-    /** How many occurrences the walk was able to account for — see {@link #refusalFor}. */
+    /**
+     * @param watched consult the WATCHED set instead of the enforced one — the observation pass, which reports
+     *                what this would have refused. The walk and the reader must be looking at the SAME set of
+     *                columns or the counts they compare are counts of different things: a legitimate equality
+     *                test on a watched column would go unaccounted for, and every test would read as a read.
+     */
+    static String refusalFor(DqlStatement<?> parsed, int columnsReachedInSql, boolean watched) {
+        return outcomeFor(parsed, columnsReachedInSql, watched) == Outcome.CLEAN ? null : refused();
+    }
+
+    /**
+     * What the walk found, for a caller that needs to tell the two refusals apart.
+     *
+     * <p>{@link #refusalFor} deliberately cannot: a client learns that its query did not run and nothing about
+     * why. The WATCH is the one caller that must, and it is not a client — it reports rather than refuses, and
+     * reporting "somebody read the token" when the truth is "this walk met a ternary" produces a count that
+     * never reaches zero and therefore an enforced rule that can never be restored. Same reason the enforced
+     * side does not care: there, an over-refusal is a visible broken screen that someone fixes within the hour.
+     */
+    enum Outcome {
+        /** Every occurrence was a sanctioned equality test. */
+        CLEAN,
+        /** The column was READ — named outside a sanctioned test, or reached in SQL without the walk seeing it. */
+        READ,
+        /** The walk met a construct it does not recognise, so it cannot say. Fail-closed when enforcing. */
+        UNANALYSABLE
+    }
+
+    static Outcome outcomeFor(DqlStatement<?> parsed, int columnsReachedInSql, boolean watched) {
+        Sanctioned sanctioned = new Sanctioned(watched);
+        String refusal = statement(parsed, sanctioned);
+        if (refusal != null)
+            return sanctioned.unanalysable ? Outcome.UNANALYSABLE : Outcome.READ;
+        // The counts disagree: the compiler emitted the column more often than the walk could account for, so
+        // something read it that the statement does not show — a fields group, an expression-defined field, an
+        // inline function body. That is a READ and not an analysis failure.
+        return sanctioned.count == columnsReachedInSql ? Outcome.CLEAN : Outcome.READ;
+    }
+
+    /**
+     * How many occurrences the walk was able to account for — see {@link #refusalFor} — and which set of
+     * columns it is accounting for. The mode rides here because this is already threaded through every step of
+     * the walk, and because the count and the set it counts must not be able to come apart.
+     */
     private static final class Sanctioned {
         private int count;
+        /** Set when the walk met something it could not read, which is not the same as finding a read. */
+        private boolean unanalysable;
+        private final boolean watched;
+
+        Sanctioned(boolean watched) {
+            this.watched = watched;
+        }
     }
 
     private static String statement(DqlStatement<?> parsed, Sanctioned sanctioned) {
@@ -94,7 +140,7 @@ final class CapabilityColumnWalk {
                 return refusal;
             for (Object[] branch : union.getUnions()) {
                 if (branch == null || branch.length < 2 || !(branch[1] instanceof Select<?> branchSelect))
-                    return unreadable();
+                    return unreadable(sanctioned);
                 refusal = select(branchSelect, sanctioned);
                 if (refusal != null)
                     return refusal;
@@ -107,7 +153,7 @@ final class CapabilityColumnWalk {
         if (parsed instanceof WithSelect<?> with) {
             for (Object[] cte : with.getCtes()) {
                 if (cte == null || cte.length < 2)
-                    return unreadable();
+                    return unreadable(sanctioned);
                 // A CTE's body is a select like any other, and its rows reach the result through the main one.
                 for (Object element : cte)
                     if (element instanceof Select<?> cteSelect) {
@@ -120,7 +166,7 @@ final class CapabilityColumnWalk {
         }
         if (parsed instanceof Select<?> select)
             return select(select, sanctioned);
-        return unreadable();
+        return unreadable(sanctioned);
     }
 
     /**
@@ -132,7 +178,7 @@ final class CapabilityColumnWalk {
      */
     private static String select(Select<?> select, Sanctioned sanctioned) {
         if (select == null)
-            return unreadable();
+            return unreadable(sanctioned);
         String refusal = expression(select.getWhere(), Position.WHERE, sanctioned);
         if (refusal != null)
             return refusal;
@@ -170,8 +216,8 @@ final class CapabilityColumnWalk {
             // token is something the caller does through a bind value — which also keeps it out of the statement
             // text that gets logged, cached and compared.
             boolean isSanctioned = position == Position.WHERE
-                && (isCapabilityMatch(equals.getLeft(), equals.getRight())
-                    || isCapabilityMatch(equals.getRight(), equals.getLeft()));
+                && (isCapabilityMatch(equals.getLeft(), equals.getRight(), sanctioned)
+                    || isCapabilityMatch(equals.getRight(), equals.getLeft(), sanctioned));
             if (isSanctioned) {
                 sanctioned.count++;
                 return null; // neither side is descended: both have just been accounted for
@@ -179,7 +225,7 @@ final class CapabilityColumnWalk {
             String refusal = expression(equals.getLeft(), position, sanctioned);
             return refusal != null ? refusal : expression(equals.getRight(), position, sanctioned);
         }
-        if (isCapabilityColumn(expression))
+        if (isCapabilityColumn(expression, sanctioned))
             return refused();
         if (expression instanceof dev.webfx.stack.orm.expression.terms.Symbol<?> symbol) {
             // A symbol that carries an expression is not a leaf: a fields group expands to its member columns
@@ -212,20 +258,24 @@ final class CapabilityColumnWalk {
         }
         if (expression instanceof SelectExpression<?> subquery) // `in (select …)`, `exists(select …)`
             return select(subquery.getSelect(), sanctioned);
-        return unreadable();
+        return unreadable(sanctioned);
     }
 
     /** {@code token = $1}: this side is a capability column and the other is a bound parameter. */
-    private static boolean isCapabilityMatch(Expression<?> column, Expression<?> value) {
-        return isCapabilityColumn(column) && value instanceof ParameterReference;
+    private static boolean isCapabilityMatch(Expression<?> column, Expression<?> value, Sanctioned sanctioned) {
+        return isCapabilityColumn(column, sanctioned) && value instanceof ParameterReference;
     }
 
-    private static boolean isCapabilityColumn(Expression<?> expression) {
+    private static boolean isCapabilityColumn(Expression<?> expression, Sanctioned sanctioned) {
         if (!(expression instanceof DomainField field))
             return false;
         DomainClass domainClass = field.getDomainClass();
-        return domainClass != null
-               && ClientReadDenyList.isCapabilityColumn(domainClass.getSqlTableName(), field.getSqlColumnName());
+        if (domainClass == null)
+            return false;
+        String table = domainClass.getSqlTableName(), column = field.getSqlColumnName();
+        return sanctioned.watched
+               ? ClientReadDenyList.isObservedCapabilityColumn(table, column)
+               : ClientReadDenyList.isCapabilityColumn(table, column);
     }
 
     /**
@@ -239,7 +289,9 @@ final class CapabilityColumnWalk {
         return DqlClientQueryInspector.DENIED_REFUSAL;
     }
 
-    private static String unreadable() {
+    /** Said the same way as {@link #refused()} to a client; distinguished only through {@link Outcome}. */
+    private static String unreadable(Sanctioned sanctioned) {
+        sanctioned.unanalysable = true;
         return DqlClientQueryInspector.DENIED_REFUSAL;
     }
 }

@@ -35,6 +35,8 @@ public final class ClientReadDenyList {
     private static volatile Set<String> deniedColumns = Collections.emptySet();
     /** "table.column", lower-cased — testable by equality, never readable. See denyColumnExceptEqualityMatch. */
     private static volatile Set<String> capabilityColumns = Collections.emptySet();
+    /** "table.column", lower-cased — WATCHED, never refused. See observeColumnExceptEqualityMatch. */
+    private static volatile Set<String> observedCapabilityColumns = Collections.emptySet();
     /** Bumped on every change, so anything that caches a verdict can tell when it went stale. */
     private static volatile int version;
 
@@ -86,12 +88,72 @@ public final class ClientReadDenyList {
             capabilityColumns = Collections.unmodifiableSet(next);
             version++;
         }
+        // Enforcing SUPERSEDES watching, so the two sets cannot both hold a column whichever order they are
+        // declared in. Watching what is already refused reports a read that never happened, and the watch's
+        // whole purpose is a count somebody will act on. Silent rather than a throw in this direction, because
+        // a deny arriving after a watch is the INTENDED end state — it is the restoration this was built for.
+        dropObserved(sqlTableName, sqlColumnName);
+    }
+
+    private static void dropObserved(String sqlTableName, String sqlColumnName) {
+        String key = normalise(sqlTableName) + "." + normalise(sqlColumnName);
+        if (observedCapabilityColumns.contains(key)) {
+            Set<String> next = new HashSet<>(observedCapabilityColumns);
+            next.remove(key);
+            observedCapabilityColumns = Collections.unmodifiableSet(next);
+            version++;
+        }
     }
 
     /** Whether this column is a capability token: testable by equality, never readable. */
     public static boolean isCapabilityColumn(String sqlTableName, String sqlColumnName) {
         return sqlTableName != null && sqlColumnName != null
                && capabilityColumns.contains(normalise(sqlTableName) + "." + normalise(sqlColumnName));
+    }
+
+    /**
+     * The same rule as {@link #denyColumnExceptEqualityMatch}, WATCHED rather than enforced: a client that
+     * reads this column is reported and served.
+     *
+     * <h3>What this is for, which is a question the enforced rule cannot answer</h3>
+     *
+     * <p>Turning the enforced rule on breaks every client still sending the old statement, and we found that
+     * out the expensive way — {@code invitation.token} refused real invitees for fifteen hours, each one told
+     * their invitation was invalid, because an emailed link is a FIRST page load served from a cached shell.
+     * The rule was paused to let the bundles age out.
+     *
+     * <p>Pausing it also removed the only instrument. The refusal WAS the detection, so with the rule off
+     * there is no way to tell whether the stale clients have gone, and switching it back on to find out costs
+     * another round of broken invitations. That is a guess dressed as a date.
+     *
+     * <p>So: declare the column here instead, learn the answer for free, and restore the enforced rule when
+     * the count has been zero long enough to mean something. <b>This can refuse nothing</b> — it is evaluated
+     * on the observation path, which the registry's own contract keeps separate from the verdict, and it is
+     * consulted by a reader that denies nothing at all.
+     */
+    public static synchronized void observeColumnExceptEqualityMatch(String sqlTableName, String sqlColumnName) {
+        // Both at once is a mistake worth catching at boot: the enforced rule already refuses and logs, so an
+        // observation beside it reports a read that never happened. It usually means a pause was restored and
+        // the watch left behind.
+        if (isCapabilityColumn(sqlTableName, sqlColumnName) || isColumnDenied(sqlTableName, sqlColumnName))
+            throw new IllegalStateException(
+                "A column already denied to clients cannot also be merely observed: " + sqlTableName);
+        Set<String> next = new HashSet<>(observedCapabilityColumns);
+        if (next.add(normalise(sqlTableName) + "." + normalise(sqlColumnName))) {
+            observedCapabilityColumns = Collections.unmodifiableSet(next);
+            version++;
+        }
+    }
+
+    /** Whether this column is being WATCHED as a capability token — reported when read, never refused. */
+    public static boolean isObservedCapabilityColumn(String sqlTableName, String sqlColumnName) {
+        return sqlTableName != null && sqlColumnName != null
+               && observedCapabilityColumns.contains(normalise(sqlTableName) + "." + normalise(sqlColumnName));
+    }
+
+    /** True when nothing is being watched, so the observation pass has nothing to look for and is skipped. */
+    public static boolean hasNoObservedColumns() {
+        return observedCapabilityColumns.isEmpty();
     }
 
     /** Denies one column to client queries, leaving the rest of its table readable. */
@@ -122,7 +184,13 @@ public final class ClientReadDenyList {
                || isCapabilityColumn(sqlTableName, sqlColumnName);
     }
 
-    /** True when nothing has been declared secret, so there is nothing for an inspector to enforce. */
+    /**
+     * True when nothing has been declared secret, so there is nothing for an inspector to enforce.
+     *
+     * <p>Watched columns are deliberately NOT counted. They enforce nothing, and a deployment that only
+     * watches must not thereby switch the enforcement path on — that would turn an observation into the
+     * fail-closed refusal it exists to avoid.
+     */
     public static boolean isEmpty() {
         return deniedTables.isEmpty() && deniedColumns.isEmpty() && capabilityColumns.isEmpty();
     }

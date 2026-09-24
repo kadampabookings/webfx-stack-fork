@@ -6,6 +6,9 @@ import dev.webfx.stack.orm.domainmodel.DomainField;
 import dev.webfx.stack.orm.dql.sqlcompiler.lci.CompilerDomainModelReader;
 import dev.webfx.stack.orm.expression.Expression;
 
+import java.util.LinkedHashSet;
+import java.util.Set;
+
 /**
  * The compiler's view of the domain model, with the client-secret tables and columns removed from it.
  *
@@ -40,9 +43,29 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
      * rather than each construct in it.
      */
     private int capabilityColumnHits;
+    /**
+     * WATCH MODE: deny nothing, and count the WATCHED capability columns instead of the enforced ones.
+     *
+     * <p>A mode rather than a second class, and the modes are kept apart rather than blended: the counting
+     * rule below is a control, and the one bug it has already had was a count that conflated two things. An
+     * observation that shared the enforced set's counter would put the same defect back — a watched column's
+     * hit would be weighed against the walk's sanctioned count for the ENFORCED ones, and the two are not
+     * measuring the same statement positions.
+     *
+     * <p>Denying nothing matters too. This reader runs on the observation path, where refusing is not
+     * available: if it threw on an enforced secret the observation would simply stop, and it would stop
+     * precisely on the statements most worth describing.
+     */
+    private final boolean watchOnly;
+    private final Set<String> watchedColumnsReached = new LinkedHashSet<>();
 
     DenyingCompilerDomainModelReader(CompilerDomainModelReader delegate) {
+        this(delegate, false);
+    }
+
+    DenyingCompilerDomainModelReader(CompilerDomainModelReader delegate, boolean watchOnly) {
         this.delegate = delegate;
+        this.watchOnly = watchOnly;
     }
 
     int capabilityColumnHits() {
@@ -52,7 +75,7 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
     @Override
     public String getDomainClassSqlTableName(Object domainClass) {
         String table = delegate.getDomainClassSqlTableName(domainClass);
-        if (ClientReadDenyList.isTableDenied(table))
+        if (!watchOnly && ClientReadDenyList.isTableDenied(table))
             throw new ClientReadDeniedException(table, null);
         return table;
     }
@@ -61,6 +84,17 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
     public String getDomainClassPrimaryKeySqlColumnName(Object domainClass) {
         String column = delegate.getDomainClassPrimaryKeySqlColumnName(domainClass);
         String table = delegate.getDomainClassSqlTableName(domainClass);
+        if (watchOnly) {
+            // Counted here too, though no token in this system is a primary key. The enforced rule DENIES a
+            // capability primary key outright through isColumnDenied above, so a watch that skipped this method
+            // would report a clean count for a column it never looked at — and clean is the answer that
+            // restores the enforced rule.
+            if (ClientReadDenyList.isObservedCapabilityColumn(table, column)) {
+                capabilityColumnHits++;
+                watchedColumnsReached.add(table + "." + column);
+            }
+            return column;
+        }
         if (ClientReadDenyList.isColumnDenied(table, column))
             throw new ClientReadDeniedException(table, column);
         return column;
@@ -70,6 +104,15 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
     public String getSymbolSqlColumnName(Object symbolDomainClass, Expression symbol) {
         String column = delegate.getSymbolSqlColumnName(symbolDomainClass, symbol);
         String table = tableOf(symbolDomainClass, symbol);
+        if (watchOnly) {
+            // Watching: count the watched set, deny nothing — not even a table or column denied outright,
+            // which the enforcing pass has already dealt with on its own compilation.
+            if (ClientReadDenyList.isObservedCapabilityColumn(table, column)) {
+                capabilityColumnHits++;
+                watchedColumnsReached.add(table + "." + column);
+            }
+            return column;
+        }
         // Asked FIRST, because isColumnDenied answers true for these too — deliberately, so that a consumer
         // which has not learned about the third category refuses one rather than handing it over.
         if (ClientReadDenyList.isCapabilityColumn(table, column)) {
@@ -79,6 +122,15 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
         if (ClientReadDenyList.isColumnDenied(table, column))
             throw new ClientReadDeniedException(table, column);
         return column;
+    }
+
+    /**
+     * Which watched columns the SQL reached, for the report. Names only — a table and a column out of the
+     * domain model, never a value. Distinct, unlike {@link #capabilityColumnHits}, which has to stay a count
+     * because the walk's rule is that the two counts AGREE.
+     */
+    Set<String> watchedColumnsReached() {
+        return watchedColumnsReached;
     }
 
     @Override

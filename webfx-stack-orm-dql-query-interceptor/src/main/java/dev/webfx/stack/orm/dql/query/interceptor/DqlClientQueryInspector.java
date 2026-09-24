@@ -127,6 +127,55 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
         } catch (Throwable ignored) {
             // Watching a query must never be able to fail one, and a broken description is not worth a refusal.
         }
+        try {
+            // Its OWN try, not the description's. Sharing one meant that anything thrown while SHAPING a
+            // statement skipped the watch for it — silently, permanently, and with nothing cached to retry. A
+            // statement in that state contributes an invisible zero to the count that decides whether the
+            // enforced rule can come back, which is the one number this must not quietly get wrong.
+            watchCapabilityColumns(DataSourceModelService.getDataSourceModel(argument.getDataSourceId()),
+                                   argument.getStatement(), !argument.isHasDqlRuntime());
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /**
+     * Reports a client reading a WATCHED capability column — the rule of
+     * {@link ClientReadDenyList#observeColumnExceptEqualityMatch}, applied without the refusal.
+     *
+     * <p>Its own compilation, through a reader that denies nothing and counts only the watched set. Sharing
+     * the enforcing pass would have been cheaper and wrong twice over: that pass stops at its first denial, so
+     * it would report whatever happened to come before one, and its counter is weighed against the walk's
+     * sanctioned count for the ENFORCED columns — a comparison that means nothing once two different sets are
+     * added into it. The counting rule has already had one bug of exactly that shape.
+     *
+     * <p><b>Not cached, deliberately.</b> The shape cache above keys a description; this needs to fire on every
+     * OCCURRENCE, because the number being collected is how often clients still read the column, not how many
+     * distinct ways they phrase it. Measured cost of the extra parse and compile: 11 µs for a trivial select,
+     * 24 µs for a typical booking read, 33 µs for the orders union — against a millisecond-scale round trip to
+     * the database. When nothing is watched it is one volatile read.
+     */
+    private void watchCapabilityColumns(DataSourceModel dataSourceModel, String statement, boolean compileExpressions) {
+        if (ClientReadDenyList.hasNoObservedColumns() || dataSourceModel == null)
+            return;
+        DenyingCompilerDomainModelReader watcher =
+            new DenyingCompilerDomainModelReader(dataSourceModel.getCompilerDomainModelReader(), true);
+        DqlStatement<?> parsed;
+        try {
+            parsed = compile(dataSourceModel, statement, compileExpressions, watcher);
+        } catch (RuntimeException e) {
+            return; // does not parse or compile: the enforcing pass refuses it, and there is nothing to describe
+        }
+        int hits = watcher.capabilityColumnHits();
+        if (hits == 0)
+            return;
+        // Same rule as the enforced one: every occurrence must be a sanctioned equality test the walk can point
+        // at. Anything left over is a READ — but "the walk does not recognise this construct" is NOT a read, and
+        // conflating them would keep the count above zero for a statement that only ever tested the column.
+        CapabilityColumnWalk.Outcome outcome = CapabilityColumnWalk.outcomeFor(parsed, hits, true);
+        if (outcome != CapabilityColumnWalk.Outcome.CLEAN)
+            ClientReadInspectionRegistry.notifyObservedCapabilityColumnRead(
+                statement, watcher.watchedColumnsReached().toArray(new String[0]),
+                outcome == CapabilityColumnWalk.Outcome.UNANALYSABLE);
     }
 
     private String decide(QueryArgument argument) {
@@ -169,6 +218,25 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
     // Package-private so the check can drive the exact compilation the inspector uses, against a real domain model.
     static void compileForClient(DataSourceModel dataSourceModel, String statement, boolean compileExpressions) {
         DenyingCompilerDomainModelReader reader = new DenyingCompilerDomainModelReader(dataSourceModel.getCompilerDomainModelReader());
+        DqlStatement<?> parsed = compile(dataSourceModel, statement, compileExpressions, reader);
+        // The reader has found a column that may be TESTED but not read. Whether the finding was legitimate is a
+        // question about where in the statement it happened, which the reader cannot see and the walk can.
+        int capabilityHits = reader.capabilityColumnHits();
+        if (capabilityHits > 0 && CapabilityColumnWalk.refusalFor(parsed, capabilityHits) != null)
+            throw new ClientReadDeniedException("a capability column", null);
+    }
+
+    /**
+     * One compilation through the given reader, returning what was parsed.
+     *
+     * <p>Shared by the enforcing pass and the watching one so that the two cannot drift: what is being watched
+     * has to be the same compilation that would be refused, or the watch says nothing about the refusal. Only
+     * the READER differs between them.
+     */
+    // Package-private for the same reason as compileForClient: so the check drives the exact compilation the
+    // inspector does, rather than a reimplementation of it that can drift from it.
+    static DqlStatement<?> compile(DataSourceModel dataSourceModel, String statement,
+                                   boolean compileExpressions, CompilerDomainModelReader reader) {
         DbmsSqlSyntax syntax = dataSourceModel.getDbmsSqlSyntax();
         DqlStatement<?> parsed = dataSourceModel.parseStatement(statement);
         if (parsed instanceof WithSelect<?> withSelect)
@@ -181,10 +249,6 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
             // An insert, update or delete sent to the QUERY endpoint. The real path would fail casting it; this
             // refuses it on purpose instead of relying on that.
             throw new IllegalArgumentException("Only a select may be sent as a query");
-        // The reader has found a column that may be TESTED but not read. Whether the finding was legitimate is a
-        // question about where in the statement it happened, which the reader cannot see and the walk can.
-        int capabilityHits = reader.capabilityColumnHits();
-        if (capabilityHits > 0 && CapabilityColumnWalk.refusalFor(parsed, capabilityHits) != null)
-            throw new ClientReadDeniedException("a capability column", null);
+        return parsed;
     }
 }
