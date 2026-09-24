@@ -550,8 +550,34 @@ public final class ServerSideStateSessionSyncer {
 
     private static void deliverRenewal(SessionTokenService.TokenRenewal renewal, String replacedToken, String serverSessionId, String runId) {
         switch (renewal.outcome()) {
-            case RENEWED -> pendingRenewedTokens.put(serverSessionId,
-                new PendingToken(replacedToken, renewal.token(), System.currentTimeMillis()));
+            case RENEWED -> {
+                // Parked FIRST, and kept even when the push below succeeds: the push is a delivery
+                // attempt, not a receipt. Until the client comes back carrying the successor, the
+                // entry is what excuses the token it still holds.
+                pendingRenewedTokens.put(serverSessionId,
+                    new PendingToken(replacedToken, renewal.token(), System.currentTimeMillis()));
+                // PUSHED, rather than waiting to be stapled to the client's next message — which is a
+                // message that may never come. A renewal is minted BEHIND the message that triggered it,
+                // so it is usually ready only after that message's reply has gone; the successor can
+                // therefore first travel on message N+1. A front-office member who opens a page, crosses
+                // the renewal threshold on the last request of the load, reads, and comes back half an
+                // hour later sends no N+1 — so they return holding a token this server retired, the
+                // grace has lapsed, and the store can only read a retired generation as a theft. That
+                // ended 19 front-office families in a day on production (2026-09-23/24), with the gap
+                // between last renewal and revocation floored at almost exactly the 30-minute grace.
+                //
+                // The ENDED case beside this has always been pushed, with the note that it is "the one
+                // outcome where the delay matters". It is not: a successor nobody receives costs a member
+                // their session just as surely, only later and less visibly.
+                //
+                // Failure changes nothing — the entry stands and the next message still carries it — so
+                // this only ever adds a chance to deliver.
+                if (runId != null)
+                    PushServerService.pushState(
+                            StateAccessor.setUserToken(StateAccessor.createEmptyState(), renewal.token()), runId)
+                        .onFailure(e -> Console.log("⚠️ Could not push a renewed identity token to its client,"
+                                                    + " so it waits for the client's next message: " + e));
+            }
             case ENDED -> {
                 pendingRenewedTokens.remove(serverSessionId);
                 // Pushed rather than left for the client's next message, because this is the one outcome where
