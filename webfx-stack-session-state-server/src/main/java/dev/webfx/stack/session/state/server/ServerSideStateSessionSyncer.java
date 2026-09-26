@@ -316,16 +316,24 @@ public final class ServerSideStateSessionSyncer {
         long nowMillis = System.currentTimeMillis();
         IdentityToken identity = PrincipalToken.verify(token, nowMillis);
         if (identity == null) {
-            if (IdentityTokenPolicy.isTokenRequired() || !SignedToken.isAuthenticButExpired(token, nowMillis)) {
+            // Computed BEFORE the decision, and deliberately not short-circuited away, because the two
+            // cases end the same way but are not the same event. On production this line appeared 104
+            // times in a day with the flip on, and nothing could say how many were sessions idle past
+            // their window — which is the policy working — and how many were signatures that did not
+            // verify, which would be a forgery, a key mismatch or a bug. One extra HMAC on a path that
+            // has already failed is a small price for being able to tell those apart.
+            boolean authenticButExpired = SignedToken.isAuthenticButExpired(token, nowMillis);
+            if (IdentityTokenPolicy.isTokenRequired() || !authenticButExpired) {
                 // The client is told only that it is logged out, never why — but while the flip is off it can
                 // still infer the difference, because an expired token leaves its session alone and this branch
                 // does not. That is a MAC-validity oracle, and it is accepted here for two reasons: guessing a
                 // valid HMAC-SHA256 is the infeasibility the whole mechanism already rests on, and a caller in
                 // this mode can assert any identity it likes with no token at all, so the oracle reveals nothing
                 // it could not more easily just do. Do not carry the old "indistinguishable on purpose" claim
-                // forward: it stopped being true here. Ordered so the extra signature check is skipped entirely
-                // once the flip is on, where both kinds end the same way anyway.
-                Console.log("🛡 Identity token presented but not valid — treating as logged out");
+                // forward: it stopped being true here.
+                Console.log("🛡 Identity token presented but not valid — treating as logged out ("
+                            + (authenticButExpired ? "authentic, past its expiry — an idle session ending"
+                                                   : "signature did not verify") + ")");
                 StateAccessor.setUserId(clientState, LogoutUserId.LOGOUT_USER_ID);
             } else {
                 noteExpiredIdentityToken(serverSessionId);
