@@ -137,8 +137,19 @@ public final class SessionTokenService {
                     // Two holders, and there is no way to tell from here which one is the member. Killing
                     // the family signs both out; leaving it alive keeps the thief in. Only one of those is
                     // a decision anybody would defend afterwards.
+                    // NAMED, because six of these a day on production were uncorrelatable with anything:
+                    // the line said what happened and gave nothing to look it up by. The family id joins
+                    // to auth_session, which then supplies the person, the tier, when the session was
+                    // issued and when it last renewed. The presented generation is the one fact that row
+                    // CANNOT supply — it holds the family's current generation, so the pair is what says
+                    // how far behind the holder was, and a holder several generations behind is a
+                    // different story from one behind by a single rotation.
+                    //
+                    // The family id is a random identifier and not personal data; everything personal
+                    // stays in the table, reachable only by somebody who can already query it.
                     Console.log("🛡 A retired identity token was presented — ending the whole session family."
-                                + " A copy of it is in someone else's hands.");
+                                + " A copy of it is in someone else's hands. family=" + presented.familyId()
+                                + " presentedGeneration=" + presented.generation());
                     yield revokeAndRemember(store, presented.familyId(), "reuse-detected")
                         .otherwise(e -> {
                             Console.log("⚠️ Could not record the revocation of a reused session family: " + e);
