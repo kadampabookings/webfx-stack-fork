@@ -305,15 +305,21 @@ public final class ExpressionSqlCompiler {
      * would return a maximum that is too low, and too low is a collision rather than an error.
      */
     private static int maxPositionalParameterIndex(DqlStatement<?> dqlStatement) {
+        // Selects only. An insert or an update carries parameters in clauses this does not read - the values
+        // it sets - so the maximum computed for one would be too low, and too low is a silent collision
+        // rather than an error. Leaving writes at 0 leaves them exactly as they compiled before; they have
+        // their own authorization plan, and nothing injects into them.
+        if (!(dqlStatement instanceof Select))
+            return 0;
+        Select<?> select = (Select<?>) dqlStatement;
         CollectOptions options = new CollectOptions()
                 .setIncludeParameter(true)
                 .setTraverseSelect(true)
                 .setFilterPersistentTerms(false);
-        Expression<?>[] clauses = dqlStatement instanceof Select ? new Expression<?>[]{
-                ((Select<?>) dqlStatement).getFields(), ((Select<?>) dqlStatement).getGroupBy(),
-                ((Select<?>) dqlStatement).getHaving(), dqlStatement.getWhere(),
-                dqlStatement.getOrderBy(), dqlStatement.getLimit()
-        } : new Expression<?>[]{dqlStatement.getWhere(), dqlStatement.getOrderBy(), dqlStatement.getLimit()};
+        Expression<?>[] clauses = {
+                select.getFields(), select.getGroupBy(), select.getHaving(),
+                select.getWhere(), select.getOrderBy(), select.getLimit()
+        };
         for (Expression<?> clause : clauses)
             if (clause != null)
                 clause.collect(options);
