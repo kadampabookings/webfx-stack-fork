@@ -101,25 +101,45 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
         return targetProvider.executeQuery(argument);
     }
 
-    private Object[] reorderNamedParameters(SqlCompiled sqlCompiled, QueryArgument argument) {
+    /**
+     * The values to bind, in the order the compiled SQL numbers them: the caller's own positional block
+     * first, then the named parameters in the order the compiler allocated them.
+     *
+     * <p><b>Names may cover only the TRAILING values.</b> A caller has always either named all of its values
+     * or none of them, and those two stay exactly as they were. The third shape is what a server-added term
+     * produces — the caller's array with a value appended and a name for that value alone — and it is the one
+     * this exists to bind correctly, since the compiler now numbers such a name above the caller's $n rather
+     * than on top of them.
+     *
+     * <p>Static and package-visible so it can be checked without an interceptor; it reads no instance state.
+     */
+    static Object[] reorderNamedParameters(SqlCompiled sqlCompiled, QueryArgument argument) {
         List<String> expectedParameterNames = sqlCompiled.getParameterNames();
-        int length = Collections.size(expectedParameterNames);
+        int namedCount = Collections.size(expectedParameterNames);
         Object[] parameters = argument.getParameters();
-        if (length == 0)
-            return parameters;
+        if (namedCount == 0)
+            return parameters; // the statement has no named parameter: the values are the positional ones
         String[] parameterNames = argument.getParameterNames();
         if (Arrays.isEmpty(parameterNames)) // Happens with search parameters (their values don't have names)
             return parameters; // We assume they are in the correct order
-        if (Arrays.length(parameterNames) != Arrays.length(parameters))
-            throw new IllegalArgumentException("The number of parameter names (" + Arrays.length(parameterNames) + ") does not match the number of parameters (" + Arrays.length(parameters) + ")");
-        Object[] orderedParameters = new Object[length];
-        for (int i = 0; i < length; i++) {
+        int suppliedCount = Arrays.length(parameters);
+        int suppliedNamedCount = Arrays.length(parameterNames);
+        if (suppliedNamedCount > suppliedCount)
+            throw new IllegalArgumentException("More parameter names (" + suppliedNamedCount + ") than parameters (" + suppliedCount + ")");
+        // Anything ahead of the named block is a positional value, and stays where the caller put it.
+        int positionalCount = suppliedCount - suppliedNamedCount;
+        if (positionalCount != sqlCompiled.getPositionalParameterCount())
+            throw new IllegalArgumentException("The statement binds " + sqlCompiled.getPositionalParameterCount()
+                    + " positional parameters but " + positionalCount + " were supplied ahead of the named ones");
+        Object[] orderedParameters = new Object[positionalCount + namedCount];
+        for (int i = 0; i < positionalCount; i++)
+            orderedParameters[i] = parameters[i];
+        for (int i = 0; i < namedCount; i++) {
             String name = expectedParameterNames.get(i);
             int index = Arrays.indexOf(parameterNames, name);
             if (index < 0)
                 throw new IllegalArgumentException("Expected parameter '" + name + "' not found in the passed parameters");
-            Object value = parameters[index];
-            orderedParameters[i] = value;
+            orderedParameters[positionalCount + i] = parameters[positionalCount + index];
         }
         return orderedParameters;
     }
