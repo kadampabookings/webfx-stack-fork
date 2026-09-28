@@ -1,6 +1,8 @@
 package dev.webfx.stack.orm.dql.sqlcompiler;
 
 import dev.webfx.stack.orm.expression.Expression;
+import dev.webfx.stack.orm.expression.CollectOptions;
+import dev.webfx.stack.orm.expression.terms.ParameterReference;
 import dev.webfx.stack.orm.dql.sqlcompiler.lci.CompilerDomainModelReader;
 import dev.webfx.stack.orm.dql.sqlcompiler.sql.SqlBuild;
 import dev.webfx.stack.orm.dql.sqlcompiler.sql.SqlClause;
@@ -287,7 +289,39 @@ public final class ExpressionSqlCompiler {
     }
 
     private static SqlBuild createSqlOrderBuild(DqlStatement dqlStatement, SqlClause sqlClause, DbmsSqlSyntax dbmsSyntax, SqlBuild parent, CompilerDomainModelReader modelReader) {
-        return new SqlBuild(parent, dqlStatement.getDomainClass(), dqlStatement.getDomainClassAlias(), sqlClause, dbmsSyntax, modelReader);
+        SqlBuild sqlBuild = new SqlBuild(parent, dqlStatement.getDomainClass(), dqlStatement.getDomainClassAlias(), sqlClause, dbmsSyntax, modelReader);
+        // Only the root: a subquery shares the statement's one parameter list, and asking it again would
+        // count the same references twice.
+        if (parent == null)
+            sqlBuild.setNamedParameterOffset(maxPositionalParameterIndex(dqlStatement));
+        return sqlBuild;
+    }
+
+    /**
+     * The highest {@code $n} the statement uses, so that names can be numbered above it.
+     *
+     * <p>Collected through {@link dev.webfx.stack.orm.expression.Expression#collect}, which every term has to
+     * implement to exist, rather than through a walk naming the constructs it expects — a walk that missed one
+     * would return a maximum that is too low, and too low is a collision rather than an error.
+     */
+    private static int maxPositionalParameterIndex(DqlStatement<?> dqlStatement) {
+        CollectOptions options = new CollectOptions()
+                .setIncludeParameter(true)
+                .setTraverseSelect(true)
+                .setFilterPersistentTerms(false);
+        Expression<?>[] clauses = dqlStatement instanceof Select ? new Expression<?>[]{
+                ((Select<?>) dqlStatement).getFields(), ((Select<?>) dqlStatement).getGroupBy(),
+                ((Select<?>) dqlStatement).getHaving(), dqlStatement.getWhere(),
+                dqlStatement.getOrderBy(), dqlStatement.getLimit()
+        } : new Expression<?>[]{dqlStatement.getWhere(), dqlStatement.getOrderBy(), dqlStatement.getLimit()};
+        for (Expression<?> clause : clauses)
+            if (clause != null)
+                clause.collect(options);
+        int max = 0;
+        for (Expression<?> term : options.getCollectedTerms())
+            if (term instanceof ParameterReference && ((ParameterReference<?>) term).getIndex() > max)
+                max = ((ParameterReference<?>) term).getIndex();
+        return max;
     }
 
     private static SqlBuild buildCommonSqlOrder(DqlStatement dqlStatement, SqlBuild sqlBuild, boolean grouped, DbmsSqlSyntax dbmsSyntax, SqlBuild parent, SqlClause parentClause, CompilerDomainModelReader modelReader) {
