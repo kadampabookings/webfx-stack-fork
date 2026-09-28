@@ -91,12 +91,18 @@ public final class ExpressionSqlCompiler {
         StringBuilder withPrefix = new StringBuilder("with ");
         List<String> allParamNames = new ArrayList<>();
         boolean first = true;
+        // As for a union: the CTE bodies and the main select are one statement with one parameter list.
+        List<Select<?>> allSelects = new ArrayList<>();
+        for (Object cteEntry : withSelect.getCtes())
+            allSelects.add((Select<?>) ((Object[]) cteEntry)[1]);
+        allSelects.add(withSelect.getMainSelect());
+        int positionalCount = maxPositionalParameterIndex(allSelects);
         for (Object cteEntry : withSelect.getCtes()) {
             Object[] cte = (Object[]) cteEntry;
             if (!first) withPrefix.append(", ");
             String cteAlias = (String) cte[0];
             Select<?> cteSelect = (Select<?>) cte[1];
-            SqlCompiled cteCompiled = compileSelect(cteSelect, dbmsSyntax, false, false, false, modelReader);
+            SqlCompiled cteCompiled = compileSelect(cteSelect, dbmsSyntax, false, false, false, modelReader, positionalCount);
             // AS MATERIALIZED forces Postgres to compute the CTE once: PG12+ inlines
             // single-reference CTEs by default, re-executing the body inside any correlated
             // subquery that references it (which defeats a precomputation CTE entirely).
@@ -109,7 +115,7 @@ public final class ExpressionSqlCompiler {
         }
         withPrefix.append(' ');
         // Compile the main select with the same flags as a regular select
-        SqlCompiled mainCompiled = compileSelect(withSelect.getMainSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+        SqlCompiled mainCompiled = compileSelect(withSelect.getMainSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader, positionalCount);
         // Merge main select parameter names
         for (String param : mainCompiled.getParameterNames())
             if (!allParamNames.contains(param))
@@ -117,7 +123,7 @@ public final class ExpressionSqlCompiler {
         // Combine WITH prefix + main SQL
         String combinedSql = withPrefix.toString() + mainCompiled.getSql();
         return new SqlCompiled(combinedSql, mainCompiled.getCountSql(), allParamNames, true,
-                null, mainCompiled.getQueryMapping(), mainCompiled.getSqlUncompilableCondition(), mainCompiled.isCacheable());
+                null, mainCompiled.getQueryMapping(), mainCompiled.getSqlUncompilableCondition(), mainCompiled.isCacheable(), positionalCount);
     }
 
     // Union compilation
@@ -127,7 +133,14 @@ public final class ExpressionSqlCompiler {
         // (readForeignFields in particular expands foreign display fields into extra columns);
         // the first branch's query mapping then applies to every row of the union result.
         // The first branch's SqlBuild is kept because a union-level order by resolves against it.
-        SqlBuild firstBuild = buildSelect(union.getFirstSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, null, null, modelReader);
+        // Every branch lands in one statement with one parameter list, so they share one positional count:
+        // a branch numbering names over only ITS OWN $n would allocate a slot another branch already uses.
+        List<Select<?>> branches = new ArrayList<>();
+        branches.add(union.getFirstSelect());
+        for (Object unionEntryObj : union.getUnions())
+            branches.add((Select<?>) ((Object[]) unionEntryObj)[1]);
+        int positionalCount = maxPositionalParameterIndex(branches);
+        SqlBuild firstBuild = buildSelect(union.getFirstSelect(), dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, null, null, modelReader, positionalCount);
         SqlCompiled firstCompiled = firstBuild.toSqlCompiled(); // freezes the first branch's SQL
         // Branches are parenthesized so a per-branch order by/limit/offset remains valid SQL
         StringBuilder sql = new StringBuilder("(").append(firstCompiled.getSql()).append(')');
@@ -137,7 +150,7 @@ public final class ExpressionSqlCompiler {
             Object[] unionEntry = (Object[]) unionEntryObj;
             boolean unionAll = (Boolean) unionEntry[0];
             Select<?> branchSelect = (Select<?>) unionEntry[1];
-            SqlCompiled branchCompiled = compileSelect(branchSelect, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+            SqlCompiled branchCompiled = compileSelect(branchSelect, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader, positionalCount);
             sql.append(unionAll ? " union all (" : " union (").append(branchCompiled.getSql()).append(')');
             // Merge named parameters (preserving order, deduplicating) — positional $N parameters
             // keep their index across branches, so they need no merging
@@ -149,7 +162,7 @@ public final class ExpressionSqlCompiler {
         if (union.getOrderBy() != null)
             compileUnionOrderBy(union.getOrderBy(), firstBuild, sql.append(" order by "), modelReader);
         return new SqlCompiled(sql.toString(), null, allParamNames, true,
-                null, firstCompiled.getQueryMapping(), firstCompiled.getSqlUncompilableCondition(), cacheable);
+                null, firstCompiled.getQueryMapping(), firstCompiled.getSqlUncompilableCondition(), cacheable, positionalCount);
     }
 
     /**
@@ -213,7 +226,11 @@ public final class ExpressionSqlCompiler {
     }
 
     public static SqlCompiled compileSelect(Select select, DbmsSqlSyntax dbmsSyntax, boolean generateQueryMapping, boolean readForeignFields, boolean compileExpressions, CompilerDomainModelReader modelReader) {
-        SqlBuild sqlBuild = buildSelect(select, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, null, null, modelReader);
+        return compileSelect(select, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader, null);
+    }
+
+    private static SqlCompiled compileSelect(Select select, DbmsSqlSyntax dbmsSyntax, boolean generateQueryMapping, boolean readForeignFields, boolean compileExpressions, CompilerDomainModelReader modelReader, Integer forcedPositionalCount) {
+        SqlBuild sqlBuild = buildSelect(select, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, null, null, modelReader, forcedPositionalCount);
         return sqlBuild.toSqlCompiled();
     }
 
@@ -249,7 +266,11 @@ public final class ExpressionSqlCompiler {
     }
 
     public static SqlBuild buildSelect(Select select, DbmsSqlSyntax dbmsSyntax, boolean generateQueryMapping, boolean readForeignFields, boolean compileExpressions, SqlBuild parent, SqlClause parentClause, CompilerDomainModelReader modelReader) {
-        SqlBuild sqlBuild = createSqlOrderBuild(select, SqlClause.SELECT, dbmsSyntax, parent, modelReader);
+        return buildSelect(select, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, parent, parentClause, modelReader, null);
+    }
+
+    private static SqlBuild buildSelect(Select select, DbmsSqlSyntax dbmsSyntax, boolean generateQueryMapping, boolean readForeignFields, boolean compileExpressions, SqlBuild parent, SqlClause parentClause, CompilerDomainModelReader modelReader, Integer forcedPositionalCount) {
+        SqlBuild sqlBuild = createSqlOrderBuild(select, SqlClause.SELECT, dbmsSyntax, parent, modelReader, forcedPositionalCount);
         // If this select's primary domain class came from a CTE alias, override the SQL table name
         if (select.getDomainClassCteAlias() != null)
             sqlBuild.setCteTableName(select.getDomainClassCteAlias());
@@ -288,13 +309,23 @@ public final class ExpressionSqlCompiler {
         return buildCommonSqlOrder(select, sqlBuild, grouped, dbmsSyntax, parent, parentClause, modelReader);
     }
 
-    private static SqlBuild createSqlOrderBuild(DqlStatement dqlStatement, SqlClause sqlClause, DbmsSqlSyntax dbmsSyntax, SqlBuild parent, CompilerDomainModelReader modelReader) {
+    private static SqlBuild createSqlOrderBuild(DqlStatement dqlStatement, SqlClause sqlClause, DbmsSqlSyntax dbmsSyntax, SqlBuild parent, CompilerDomainModelReader modelReader, Integer forcedPositionalCount) {
         SqlBuild sqlBuild = new SqlBuild(parent, dqlStatement.getDomainClass(), dqlStatement.getDomainClassAlias(), sqlClause, dbmsSyntax, modelReader);
         // Only the root: a subquery shares the statement's one parameter list, and asking it again would
-        // count the same references twice.
+        // count the same references twice. A union branch or a CTE body IS a root by this test, yet the
+        // branches end up in ONE statement sharing ONE parameter list — so each is handed the maximum taken
+        // across all of them, rather than computing its own and numbering over a block the others also use.
         if (parent == null)
-            sqlBuild.setNamedParameterOffset(maxPositionalParameterIndex(dqlStatement));
+            sqlBuild.setNamedParameterOffset(forcedPositionalCount != null ? forcedPositionalCount : maxPositionalParameterIndex(dqlStatement));
         return sqlBuild;
+    }
+
+    /** The highest {@code $n} across several selects that will share one parameter list. */
+    private static int maxPositionalParameterIndex(List<Select<?>> selects) {
+        int max = 0;
+        for (Select<?> select : selects)
+            max = Math.max(max, maxPositionalParameterIndex(select));
+        return max;
     }
 
     /**
@@ -348,7 +379,7 @@ public final class ExpressionSqlCompiler {
     // Update compilation
 
     private static SqlBuild buildInsert(Insert insert, DbmsSqlSyntax dbmsSyntax, CompilerDomainModelReader modelReader) {
-        SqlBuild sqlBuild = createSqlOrderBuild(insert, SqlClause.INSERT, dbmsSyntax, null, modelReader);
+        SqlBuild sqlBuild = createSqlOrderBuild(insert, SqlClause.INSERT, dbmsSyntax, null, modelReader, null);
         String primaryKeySqlColumnName = modelReader.getDomainClassPrimaryKeySqlColumnName(insert.getDomainClass());
         sqlBuild.setAutoGeneratedKeyColumnNames(new String[]{primaryKeySqlColumnName});
         Options insertOptions = new Options(sqlBuild, SqlClause.INSERT, ", ", false, false, false, modelReader);
@@ -367,7 +398,7 @@ public final class ExpressionSqlCompiler {
     // Update compilation
 
     private static SqlBuild buildUpdate(Update update, DbmsSqlSyntax dbmsSyntax, CompilerDomainModelReader modelReader) {
-        SqlBuild sqlBuild = createSqlOrderBuild(update, SqlClause.UPDATE, dbmsSyntax, null, modelReader);
+        SqlBuild sqlBuild = createSqlOrderBuild(update, SqlClause.UPDATE, dbmsSyntax, null, modelReader, null);
         compileExpression(update.getSetClause(), new Options(sqlBuild, SqlClause.UPDATE, ", ", false, false, false, modelReader));
         return buildCommonSqlOrder(update, sqlBuild, false, dbmsSyntax, null, null, modelReader);
     }
@@ -375,7 +406,7 @@ public final class ExpressionSqlCompiler {
     // Delete compilation
 
     private static SqlBuild buildDelete(Delete delete, DbmsSqlSyntax dbmsSyntax, CompilerDomainModelReader modelReader) {
-        SqlBuild sqlBuild = createSqlOrderBuild(delete, SqlClause.DELETE, dbmsSyntax, null, modelReader);
+        SqlBuild sqlBuild = createSqlOrderBuild(delete, SqlClause.DELETE, dbmsSyntax, null, modelReader, null);
         return buildCommonSqlOrder(delete, sqlBuild, false, dbmsSyntax, null, null, modelReader);
     }
 

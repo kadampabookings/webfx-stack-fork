@@ -5,6 +5,7 @@ import dev.webfx.stack.orm.dql.sqlcompiler.sql.SqlCompiled;
 import dev.webfx.stack.orm.dql.sqlcompiler.sql.dbms.PostgresSyntax;
 import dev.webfx.stack.orm.expression.parser.ExpressionParser;
 import dev.webfx.stack.orm.expression.parser.lci.mock.ParserDomainModelReaderMock;
+import dev.webfx.stack.orm.expression.terms.DqlStatement;
 import dev.webfx.stack.orm.expression.terms.Select;
 
 /**
@@ -48,6 +49,24 @@ public class ParameterNumberingCheck {
         check("out of order", "select id from Document d where event=$2 and ref=$1 and cart=?caller",
                 "d.event=$2 and d.\"ref\"=$1 and d.cart=$3", "[caller]", 2);
 
+        // A union's branches are separate roots that share ONE parameter list. A branch numbering names
+        // over only its own $n would hand out a slot another branch already uses, so they share one count.
+        // THE discriminating one: the name sits in the branch with the LOWER maximum, so a branch numbering
+        // over its own $n alone would give it $2 — the slot the other branch's $2 already holds.
+        check("name in the branch with the lower maximum",
+                "select id from Document d where event=$1 and ref=?caller union select id from Document d where cart=$2",
+                "(select d.id, d.id from document as d where d.event=$1 and d.\"ref\"=$3) union (select d.id, d.id from document as d where d.cart=$2)",
+                "[caller]", 2);
+        check("union takes the maximum across branches",
+                "select id from Document d where event=$1 union select id from Document d where cart=$2 and ref=?caller",
+                "union (select d.id, d.id from document as d where d.cart=$2 and d.\"ref\"=$3)", "[caller]", 2);
+        check("union, branch maxima in the other order",
+                "select id from Document d where event=$2 and ref=?caller union select id from Document d where cart=$1",
+                "d.event=$2 and d.\"ref\"=$3) union (select d.id, d.id from document as d where d.cart=$1)", "[caller]", 2);
+        check("union with no names is untouched",
+                "select id from Document d where event=$1 union select id from Document d where cart=$2",
+                "(select d.id, d.id from document as d where d.event=$1) union (select d.id, d.id from document as d where d.cart=$2)", "[]", 2);
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " parameter numbering checks failed");
@@ -58,9 +77,15 @@ public class ParameterNumberingCheck {
             ParserDomainModelReaderMock model = new ParserDomainModelReaderMock()
                     .declareFields("Document", "id,ref,event,person,cart")
                     .declareFields("DocumentLine", "id,document,item");
-            Select<?> select = ExpressionParser.parseSelect(dql, model);
-            SqlCompiled compiled = ExpressionSqlCompiler.compileSelect(
-                    select, PostgresSyntax.get(), false, false, new CompilerDomainModelReaderMock());
+            SqlCompiled compiled;
+            if (dql.contains(" union ")) {
+                DqlStatement<?> statement = ExpressionParser.parseStatement(dql, model);
+                compiled = ExpressionSqlCompiler.compileStatement(statement, PostgresSyntax.get(), new CompilerDomainModelReaderMock());
+            } else {
+                Select<?> select = ExpressionParser.parseSelect(dql, model);
+                compiled = ExpressionSqlCompiler.compileSelect(
+                        select, PostgresSyntax.get(), false, false, new CompilerDomainModelReaderMock());
+            }
             boolean ok = compiled.getSql().endsWith(expectedSqlTail)
                     && compiled.getParameterNames().toString().equals(expectedNames)
                     && compiled.getPositionalParameterCount() == expectedPositionalCount;
