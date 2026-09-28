@@ -49,6 +49,12 @@ public class ParameterNumberingCheck {
         check("out of order", "select id from Document d where event=$2 and ref=$1 and cart=?caller",
                 "d.event=$2 and d.\"ref\"=$1 and d.cart=$3", "[caller]", 2);
 
+        // Every clause that can hold an expression has to be counted. offset was missed on the first
+        // attempt, and a missed clause is a maximum too low, which is a silent collision.
+        check("offset counts toward the maximum",
+                "select id from Document d where person=CALLER_PERSON order by ref limit $1 offset $2",
+                "order by d.\"ref\" limit $1 offset $2", "[caller.person]", 2);
+
         // CALLER_PERSON is a term, not a parameter — the client cannot supply a value for it — and it
         // compiles to a bound slot above the caller's own $n. A literal here would be cached with the
         // statement text and served to the next caller, which is the whole reason it is a parameter.

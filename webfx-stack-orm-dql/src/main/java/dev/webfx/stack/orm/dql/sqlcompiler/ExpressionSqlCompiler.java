@@ -347,9 +347,13 @@ public final class ExpressionSqlCompiler {
                 .setIncludeParameter(true)
                 .setTraverseSelect(true)
                 .setFilterPersistentTerms(false);
+        // EVERY clause of a select that can hold an expression. Compare it against Select's accessors when
+        // one is added: a clause missing here yields a maximum that is too low, which is a collision rather
+        // than an error, and the collision is silent. getAdditionalFromEntities is deliberately absent - it
+        // holds classes, aliases and CTE names, never expressions.
         Expression<?>[] clauses = {
                 select.getFields(), select.getGroupBy(), select.getHaving(),
-                select.getWhere(), select.getOrderBy(), select.getLimit()
+                select.getWhere(), select.getOrderBy(), select.getLimit(), select.getOffset()
         };
         for (Expression<?> clause : clauses)
             if (clause != null)
@@ -358,6 +362,10 @@ public final class ExpressionSqlCompiler {
         for (Expression<?> term : options.getCollectedTerms())
             if (term instanceof ParameterReference && ((ParameterReference<?>) term).getIndex() > max)
                 max = ((ParameterReference<?>) term).getIndex();
+        // A lateral subquery is a select of its own, reached through none of the clauses above.
+        if (select.getLateralSubqueries() != null)
+            for (Object lateral : select.getLateralSubqueries())
+                max = Math.max(max, maxPositionalParameterIndex((Select<?>) ((Object[]) lateral)[1]));
         return max;
     }
 
