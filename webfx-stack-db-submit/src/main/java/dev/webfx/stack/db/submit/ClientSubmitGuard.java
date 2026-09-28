@@ -125,6 +125,7 @@ public final class ClientSubmitGuard {
     public static final String RAW_STATEMENT_REFUSED = "A client write must be DQL";
     public static final String UNCHECKABLE_REFUSED = "This write cannot be checked, so it was not run";
     public static final String DENIED_REFUSED = "This write is not allowed from a client";
+    public static final String NOT_A_WRITE_REFUSED = "The submit endpoint runs writes only";
 
     private static volatile Inspector inspector;
     private static volatile RawStatementPolicy rawStatementPolicy;

@@ -67,7 +67,15 @@ final class DqlClientSubmitInspector implements ClientSubmitGuard.Inspector {
             : statement instanceof Delete ? ProtectedEntityWriteRegistry.WriteVerb.DELETE
             : null;
         if (verb == null)
-            return ClientSubmitGuard.Inspection.allowed(null); // not a write
+            // Not a write — a SELECT, or another read (WithSelect, Union). The submit endpoint runs it
+            // against the database verbatim, and the READ deny list is enforced only on the query path
+            // (ClientReadDenyList / ClientQueryGuard), never here. So a read let through here is a second,
+            // unguarded door to every column the query path hides: a client could `select token from
+            // MagicLink where token like $1` and read the presence of a match back through returnGeneratedKeys.
+            // The submit endpoint has no legitimate read — the query endpoint exists for that — so a read
+            // arriving here is refused outright rather than run. (Reached only for language=DQL: the guard
+            // routes raw statements and transaction preambles elsewhere before the inspector is asked.)
+            return ClientSubmitGuard.Inspection.refused(ClientSubmitGuard.NOT_A_WRITE_REFUSED);
         DomainClass domainClass = statement.getDomainClass() instanceof DomainClass dc ? dc
             : dataSourceModel.getDomainModel().getClass(statement.getDomainClass());
         if (domainClass == null)
