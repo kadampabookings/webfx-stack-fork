@@ -44,6 +44,11 @@ public class Function<T> {
         new Function("least").register();
         new Function("jsonb_build_array").register();
 
+        // The caller, resolved by the server at execution and bound as a parameter — never as a literal,
+        // because compiled SQL is cached by statement text and two callers send the same text.
+        new ServerParameterFunction<>("CALLER_PERSON", "caller.person", PrimType.LONG).register();
+        new ServerParameterFunction<>("CALLER_ACCOUNT", "caller.account", PrimType.LONG).register();
+
         new Sum().register();
         new StringAgg().register();
         new CurrentDate().register();

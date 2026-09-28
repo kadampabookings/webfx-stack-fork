@@ -16,6 +16,7 @@ import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.orm.domainmodel.DataSourceModel;
 import dev.webfx.stack.orm.dql.sqlcompiler.mapping.QueryRowToEntityMapping;
 import dev.webfx.stack.orm.dql.sqlcompiler.sql.SqlCompiled;
+import dev.webfx.stack.orm.expression.terms.function.ServerParameterFunction;
 
 import java.util.List;
 
@@ -120,6 +121,16 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
         if (namedCount == 0)
             return parameters; // the statement has no named parameter: the values are the positional ones
         String[] parameterNames = argument.getParameterNames();
+        // A server-supplied term is the server's to value, so its absence is a server fault and has to say so
+        // here. Left to the early return below it reaches the driver as a bind-count mismatch, which names
+        // neither the statement nor the term that was never resolved.
+        for (int i = 0; i < namedCount; i++) {
+            String name = expectedParameterNames.get(i);
+            if (name.startsWith(ServerParameterFunction.PARAMETER_NAME_PREFIX)
+                    && Arrays.indexOf(parameterNames, name) < 0)
+                throw new IllegalArgumentException("The statement uses the server-supplied term '" + name
+                        + "' and nothing resolved it. Its value is not the caller's to send.");
+        }
         if (Arrays.isEmpty(parameterNames)) // Happens with search parameters (their values don't have names)
             return parameters; // We assume they are in the correct order
         int suppliedCount = Arrays.length(parameters);

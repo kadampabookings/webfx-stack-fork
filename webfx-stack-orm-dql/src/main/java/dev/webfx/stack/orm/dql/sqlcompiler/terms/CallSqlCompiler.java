@@ -6,6 +6,7 @@ import dev.webfx.stack.orm.dql.sqlcompiler.sql.SqlClause;
 import dev.webfx.stack.orm.expression.terms.Dot;
 import dev.webfx.stack.orm.expression.terms.function.Call;
 import dev.webfx.stack.orm.expression.terms.function.Function;
+import dev.webfx.stack.orm.expression.terms.function.ServerParameterFunction;
 import dev.webfx.stack.orm.expression.terms.function.InlineFunction;
 
 /**
@@ -40,6 +41,19 @@ public final class CallSqlCompiler extends AbstractTermSqlCompiler<Call<?>> {
                     } finally {
                         inlineFunction.popArguments();
                     }
+            } else if (f instanceof ServerParameterFunction) {
+                // A term only the server can value. It is emitted as a BOUND PARAMETER and never as a
+                // literal: compiled SQL is cached by statement text, two callers send the same text, and a
+                // literal would serve the first caller's identity to the second. Numbered like any other
+                // name — above the caller's own $n — so the value is appended at execution.
+                String parameterName = ((ServerParameterFunction<?>) f).getParameterName();
+                int index = o.build.getParameterNames().indexOf(parameterName) + 1;
+                if (index <= 0) { // first use in this statement: take the next slot
+                    o.build.getParameterNames().add(parameterName);
+                    index = o.build.getParameterNames().size();
+                }
+                index += o.build.getNamedParameterOffset();
+                o.build.addColumnInClause(null, o.build.getDbmsSyntax().generateParameterToken(index), null, null, o.clause, o.separator, false, false, o.generateQueryMapping);
             } else {
                 StringBuilder sb;
                 String name = ExpressionSqlCompiler.toSqlString(f.getName()); // Ex: AbcNames transformed to abc_names

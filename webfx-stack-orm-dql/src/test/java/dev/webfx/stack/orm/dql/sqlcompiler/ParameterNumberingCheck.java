@@ -49,6 +49,26 @@ public class ParameterNumberingCheck {
         check("out of order", "select id from Document d where event=$2 and ref=$1 and cart=?caller",
                 "d.event=$2 and d.\"ref\"=$1 and d.cart=$3", "[caller]", 2);
 
+        // CALLER_PERSON is a term, not a parameter — the client cannot supply a value for it — and it
+        // compiles to a bound slot above the caller's own $n. A literal here would be cached with the
+        // statement text and served to the next caller, which is the whole reason it is a parameter.
+        check("caller term takes a slot above the positional block",
+                "select id from Document d where person=CALLER_PERSON and event=$1",
+                "d.person=$2 and d.event=$1", "[caller.person]", 1);
+        check("caller term with no positional parameters",
+                "select id from Document d where person=CALLER_PERSON",
+                "d.person=$1", "[caller.person]", 0);
+        check("the same caller term twice reuses its slot",
+                "select id from Document d where person=CALLER_PERSON and event=$1 and cart=CALLER_PERSON",
+                "d.person=$2 and d.event=$1 and d.cart=$2", "[caller.person]", 1);
+        check("two different caller terms take two slots",
+                "select id from Document d where person=CALLER_PERSON and event=$1 and cart=CALLER_ACCOUNT",
+                "d.person=$2 and d.event=$1 and d.cart=$3", "[caller.person, caller.account]", 1);
+        check("caller term inside a subquery shares the statement's numbering",
+                "select id from Document d where event=$1 and id in (select document from DocumentLine where item=$2 and id=CALLER_PERSON)",
+                "d.event=$1 and d.id in (select tt1.document from document_line as tt1 where tt1.item=$2 and tt1.id=$3)",
+                "[caller.person]", 2);
+
         // A union's branches are separate roots that share ONE parameter list. A branch numbering names
         // over only its own $n would hand out a slot another branch already uses, so they share one count.
         // THE discriminating one: the name sits in the branch with the LOWER maximum, so a branch numbering

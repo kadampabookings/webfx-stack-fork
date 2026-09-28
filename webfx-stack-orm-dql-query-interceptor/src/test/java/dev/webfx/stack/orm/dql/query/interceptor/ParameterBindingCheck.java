@@ -54,6 +54,17 @@ public class ParameterBindingCheck {
         checkThrows("expected name absent", compiled(List.of("caller"), 1),
                 argument(new Object[]{"p1", "v"}, new String[]{"somethingElse"}));
 
+        // A server-supplied term that nothing resolved is a server fault, and says so here rather than
+        // reaching the driver as a bind-count mismatch naming neither the statement nor the term.
+        checkThrows("server term unresolved", compiled(List.of("caller.person"), 1),
+                argument(new Object[]{"p1"}, null));
+        checkThrows("server term unresolved among supplied names", compiled(List.of("caller.person"), 1),
+                argument(new Object[]{"p1", "v"}, new String[]{"somethingElse"}));
+        // Resolved, it binds like any other trailing name.
+        check("server term resolved", compiled(List.of("caller.person"), 2),
+                argument(new Object[]{"p1", "p2", 4242}, new String[]{"caller.person"}),
+                new Object[]{"p1", "p2", 4242});
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " parameter binding checks failed");
