@@ -44,8 +44,14 @@ public final class ClientReadScope {
         ClientReadScope.provider = provider;
     }
 
-    /** Null when nothing is registered, no scope applies, or this entity is unscoped. */
-    static Expression<?> conditionFor(Object domainClass, Object scopeToken) {
+    /**
+     * Null when nothing is registered, no scope applies, or this entity is unscoped.
+     *
+     * <p>Public only because the two injection points are in different packages — the select root in this
+     * one, the join in {@code ...sqlcompiler.sql} — and not part of the surface anyone outside the compiler
+     * should call. Register a {@link Provider} instead.
+     */
+    public static Expression<?> conditionFor(Object domainClass, Object scopeToken) {
         return provider == null || scopeToken == null ? null : provider.readScopeCondition(domainClass, scopeToken);
     }
 }

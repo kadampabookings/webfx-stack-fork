@@ -525,14 +525,14 @@ public final class SqlBuild {
         }
     }
 
-    public String addJoinCondition(String table1Alias, String column1Name, String table2Alias, String table2Name, String column2Name, boolean leftOuter) {
+    public String addJoinCondition(String table1Alias, String column1Name, String table2Alias, String table2Name, String column2Name, boolean leftOuter, Object table2DomainClass, CompilerDomainModelReader modelReader) {
         SqlBuild logicalAliasBuild = getLogicalAliasBuild(table1Alias);
         if (logicalAliasBuild == null)
             logicalAliasBuild = this;
-        return logicalAliasBuild.addJoinCondition2(table1Alias, column1Name, table2Alias, table2Name, column2Name, leftOuter);
+        return logicalAliasBuild.addJoinCondition2(table1Alias, column1Name, table2Alias, table2Name, column2Name, leftOuter, table2DomainClass, modelReader);
     }
 
-    private String addJoinCondition2(String table1Alias, String column1Name, String table2Alias, String table2Name, String column2Name, boolean leftOuter) {
+    private String addJoinCondition2(String table1Alias, String column1Name, String table2Alias, String table2Name, String column2Name, boolean leftOuter, Object table2DomainClass, CompilerDomainModelReader modelReader) {
         table1Alias = getSqlAlias(table1Alias, this);
         // LinkedHashMap: joins are emitted in the FROM clause in REGISTRATION order (select-clause
         // joins first, where-clause joins last). This matters for queries with more relations than
@@ -547,6 +547,7 @@ public final class SqlBuild {
             join.leftOuter &= leftOuter;
         } else {
             join.table2Alias = getNewTableAlias(table2Name, null, true);
+            join.scopePredicate = compileJoinScopePredicate(table2DomainClass, join.table2Alias, modelReader);
             table1Joins.put(join, join);
         }
         if (table2Alias == null)
@@ -558,6 +559,57 @@ public final class SqlBuild {
         return join.table2Alias;
     }
 
+    /**
+     * The scope condition for a table reached by a JOIN, as SQL, or null.
+     *
+     * <p>A joined table gets no SqlBuild of its own, so the condition added to every select would never
+     * reach it — {@code d.person.email} reads a person through a join and nothing else. This is the second
+     * injection point.
+     *
+     * <p><b>Compiled now, at registration, and not when the join is emitted.</b> Emission happens inside
+     * toSql(), and toCountSql() renders the same joins again, so a predicate compiled there would allocate
+     * its parameters twice. Here it goes through the ordinary compileExpression, which numbers its
+     * parameters alongside the caller's and puts every column it names in front of the denying reader.
+     *
+     * <p>The predicate is compiled with the JOINED entity as the compiling context, since that is what it
+     * was parsed against, then the context is put back.
+     */
+    private String compileJoinScopePredicate(Object table2DomainClass, String table2Alias, CompilerDomainModelReader modelReader) {
+        if (table2DomainClass == null || modelReader == null)
+            return null;
+        Expression<?> condition = dev.webfx.stack.orm.dql.sqlcompiler.ClientReadScope.conditionFor(table2DomainClass, getScopeToken());
+        if (condition == null)
+            return null;
+        if (compilingJoinScope)
+            // A scope predicate that navigates would register a join while we are registering one, which
+            // mutates the map being written and re-enters this method. Refused by name rather than left to
+            // fail as a concurrent modification: a scope condition is meant to be a local test on the entity
+            // it scopes - see the plan's note on keeping them cheap - and one that navigates needs a
+            // different mechanism, not a subtler version of this one.
+            throw new IllegalStateException("A data scope condition must not navigate to another entity:"
+                + " compiling one for a joined table registered a further join");
+        compilingJoinScope = true;
+        Object previousClass = getCompilingClass();
+        String previousAlias = getCompilingTableAlias();
+        try {
+            // The predicate was parsed against the JOINED entity, so it is compiled as that entity, at the
+            // join's own alias — otherwise its columns resolve against whatever select we happen to be in.
+            setCompilingClass(table2DomainClass);
+            setCompilingTableAlias(table2Alias);
+            // compileToScratchSqlText and not a scratch clause of our own: it uses HAVING rather than
+            // VALUES precisely because addColumnInClause strips the table alias in insert/values/update,
+            // which silently produced an UNQUALIFIED column here — a scope condition that reads as the
+            // outer table's column, which either fails to compile or, worse, does not.
+            return compileToScratchSqlText(condition, modelReader);
+        } finally {
+            setCompilingClass(previousClass);
+            setCompilingTableAlias(previousAlias);
+            compilingJoinScope = false;
+        }
+    }
+
+    private boolean compilingJoinScope;
+
     private static final class Join {
         // Join identifying fields (to include in equals and hash)
         final String table1Alias;
@@ -568,6 +620,8 @@ public final class SqlBuild {
         // Join attributes (not to include in equals and hash)
         String table2Alias;
         boolean leftOuter;
+        /** The data-scope condition for the joined table, already SQL, or null. */
+        String scopePredicate;
 
         private Join(String table1Alias, String column1Name, String table2Name, String column2Name, String table2Alias, boolean leftOuter) {
             this.table1Alias = table1Alias;
@@ -582,7 +636,11 @@ public final class SqlBuild {
             if (leftOuter)
                 sb.append(" left");
             sb.append(" join ").append(table2Name).append(' ').append(table2Alias);
-            if (column1Name.equals(column2Name)) // 'using' syntax when column names are identical
+            // `using` cannot carry an extra condition, so a scoped join is written with `on` instead. The
+            // condition goes in the ON and not the WHERE deliberately: in the WHERE it would turn a left
+            // outer join inner and delete the row, where in the ON the row survives with the joined columns
+            // null. "The booking is yours to see, that person's details are not" — see the plan.
+            if (column1Name.equals(column2Name) && scopePredicate == null) // 'using' syntax when column names are identical
                 sb.append(" using ").append(column1Name);
             else { // 'on' syntax
                 sb.append(" on ").append(table2Alias).append('.').append(column2Name).append('=');
@@ -590,6 +648,8 @@ public final class SqlBuild {
                     sb.append(table1Alias).append('.');
                 sb.append(column1Name);
             }
+            if (scopePredicate != null)
+                sb.append(" and (").append(scopePredicate).append(')');
         }
 
         static void appendJoins(Map<Join, Join> joinMap, StringBuilder sb) {

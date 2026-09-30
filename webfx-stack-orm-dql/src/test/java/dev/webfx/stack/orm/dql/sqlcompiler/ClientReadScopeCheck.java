@@ -48,6 +48,21 @@ public class ClientReadScopeCheck {
         check("an unscoped entity is untouched", "select id from DocumentLine dl where document=$1", 5,
               "select dl.id, dl.id from document_line as dl where dl.document=$1");
 
+        // THE SECOND INJECTION POINT. A table reached through a dot path gets no select of its own, so the
+        // condition added to every select never reaches it: d.person.email reads a Person through a join.
+        ClientReadScope.registerProvider((domainClass, scopeToken) ->
+            "Person".equals(String.valueOf(domainClass))
+                ? ExpressionParser.parseExpression("organization=" + scopeToken, domainClass, model())
+                : null);
+
+        check("a table reached by a join is scoped in its ON clause",
+              "select id from Document d where person.email=$1", 5,
+              "select d.id, d.id from document as d join person j2 on j2.id=d.person_id and (j2.organization=5) where j2.email=$1");
+
+        check("with no token, the join is written exactly as before",
+              "select id from Document d where person.email=$1", null,
+              "select d.id, d.id from document as d join person j2 on j2.id=d.person_id where j2.email=$1");
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " scope injection checks failed");
@@ -56,6 +71,7 @@ public class ClientReadScopeCheck {
     private static ParserDomainModelReaderMock model() {
         return new ParserDomainModelReaderMock()
                 .declareFields("Document", "id,ref,event,person,organization")
+                .declareFields("Person", "id,email,organization")
                 .declareFields("DocumentLine", "id,document,item");
     }
 
