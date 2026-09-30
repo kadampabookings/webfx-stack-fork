@@ -22,8 +22,10 @@ public final class DataSourceModel implements HasDomainModel {
     private final DbmsSqlSyntax dbmsSqlSyntax;
     private final DomainModel domainModel;
     private CompilerDomainModelReader compilerDomainModelReader;
-    private final Map<String, SqlCompiled> sqlCompiledCache = new /*Weak*/HashMap<>();
-    private final Map<String, SqlCompiled> sqlCompiledWithExpressionsCache = new HashMap<>();
+    // Bounded, and per data scope — see ScopedCompilationCache for why in both directions, and why neither
+    // weak nor soft references are the answer. (Was a plain HashMap keyed on client-chosen text, unbounded.)
+    private final ScopedCompilationCache sqlCompiledCache = new ScopedCompilationCache();
+    private final ScopedCompilationCache sqlCompiledWithExpressionsCache = new ScopedCompilationCache();
 
     public DataSourceModel(Object dataSourceId, DbmsSqlSyntax dbmsSqlSyntax, DomainModel domainModel) {
         this.dataSourceId = dataSourceId;
@@ -76,8 +78,9 @@ public final class DataSourceModel implements HasDomainModel {
      * cache can exist at all.
      */
     public SqlCompiled parseAndCompileSelect(String stringSelect, boolean compileExpressions, Object scopeToken) {
-        Map<String, SqlCompiled> cache = compileExpressions ? sqlCompiledWithExpressionsCache : sqlCompiledCache;
-        String key = scopeToken == null ? stringSelect : scopeToken + "\u0000" + stringSelect;
+        ScopedCompilationCache cache = compileExpressions ? sqlCompiledWithExpressionsCache : sqlCompiledCache;
+        cache.noteScopeToken(scopeToken);
+        String key = ScopedCompilationCache.keyOf(stringSelect, scopeToken);
         SqlCompiled sqlCompiled = cache.get(key);
         if (sqlCompiled == null)
             cache.put(key, sqlCompiled = ExpressionSqlCompiler.compileForScope(parseStatement(stringSelect), scopeToken,
