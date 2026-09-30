@@ -65,6 +65,16 @@ public class ParameterBindingCheck {
                 argument(new Object[]{"p1", "p2", 4242}, new String[]{"caller.person"}),
                 new Object[]{"p1", "p2", 4242});
 
+        // Over-attachment costs nothing: the endpoint attaches a caller value on a text match, so a
+        // statement that merely mentions CALLER_ in a literal gets values it never uses. They are dropped.
+        check("surplus named values are dropped, not bound", compiled(List.of(), 2),
+                argument(new Object[]{"p1", "p2", 77, 88}, new String[]{"caller.person", "caller.account"}),
+                new Object[]{"p1", "p2"});
+        // And a statement using only ONE of the attached terms binds that one and ignores the other.
+        check("one term used, the other attached and unused", compiled(List.of("caller.person"), 2),
+                argument(new Object[]{"p1", "p2", 77, 88}, new String[]{"caller.person", "caller.account"}),
+                new Object[]{"p1", "p2", 77});
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " parameter binding checks failed");

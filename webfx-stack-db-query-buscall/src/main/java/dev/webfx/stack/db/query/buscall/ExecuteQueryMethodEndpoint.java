@@ -6,6 +6,7 @@ import dev.webfx.stack.db.query.ClientQueryGuard;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
+import dev.webfx.stack.db.query.ServerCallerParameters;
 
 /**
  * @author Bruno Salmon
@@ -19,7 +20,11 @@ public final class ExecuteQueryMethodEndpoint extends AsyncFunctionBusCallEndpoi
             String refusal = ClientQueryGuard.refusalReason(arg);
             if (refusal != null)
                 return Future.failedFuture(refusal);
-            return QueryService.executeQuery(arg).map(result -> stripMetadataIfRequested(arg, result));
+            // Resolved HERE because the principal is on this thread and will not be by the time the query is
+            // bound — see ServerCallerParameters. Attached after the guard so a refused query never resolves
+            // a caller, and before execution so the terms have values by the time they are compiled.
+            QueryArgument resolved = ServerCallerParameters.attach(arg);
+            return QueryService.executeQuery(resolved).map(result -> stripMetadataIfRequested(arg, result));
         });
     }
 

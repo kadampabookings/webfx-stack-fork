@@ -118,8 +118,20 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
         List<String> expectedParameterNames = sqlCompiled.getParameterNames();
         int namedCount = Collections.size(expectedParameterNames);
         Object[] parameters = argument.getParameters();
-        if (namedCount == 0)
+        if (namedCount == 0) {
+            // The statement names nothing, so anything named that was supplied is surplus and is dropped
+            // rather than bound. This is how a caller term attached on a text match survives a statement that
+            // merely mentioned CALLER_ in a literal: the endpoint cannot parse, so it may over-attach, and
+            // over-attaching has to cost nothing.
+            int suppliedNames = Arrays.length(argument.getParameterNames());
+            if (suppliedNames > 0 && Arrays.length(parameters) >= suppliedNames) {
+                Object[] positionalOnly = new Object[Arrays.length(parameters) - suppliedNames];
+                for (int i = 0; i < positionalOnly.length; i++)
+                    positionalOnly[i] = parameters[i];
+                return positionalOnly;
+            }
             return parameters; // the statement has no named parameter: the values are the positional ones
+        }
         String[] parameterNames = argument.getParameterNames();
         // A server-supplied term is the server's to value, so its absence is a server fault and has to say so
         // here. Left to the early return below it reaches the driver as a bind-count mismatch, which names
