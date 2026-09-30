@@ -22,6 +22,32 @@ import java.util.Map;
  */
 public final class ExpressionSqlCompiler {
 
+    /**
+     * The scope the current compilation is for.
+     *
+     * <p>Held for the duration of one compile rather than threaded through every entry point: compileSelect,
+     * compileUnion, compileWithSelect and buildSelect are called from several modules, and widening all of
+     * them would change signatures no caller of this feature uses. Compilation is synchronous and does not
+     * escape the thread - the result is cached and reused, the compiling is not - so the value is set
+     * immediately before and cleared immediately after, in a finally.
+     */
+    private static final ThreadLocal<Object> COMPILING_SCOPE_TOKEN = new ThreadLocal<>();
+
+    /** Compiles {@code statement} under {@code scopeToken}, with the scope conditions of that scope added. */
+    public static SqlCompiled compileForScope(DqlStatement statement, Object scopeToken, DbmsSqlSyntax dbmsSyntax, boolean generateQueryMapping, boolean readForeignFields, boolean compileExpressions, CompilerDomainModelReader modelReader) {
+        Object previous = COMPILING_SCOPE_TOKEN.get();
+        COMPILING_SCOPE_TOKEN.set(scopeToken);
+        try {
+            if (statement instanceof WithSelect)
+                return compileWithSelect((WithSelect<?>) statement, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+            if (statement instanceof Union)
+                return compileUnion((Union<?>) statement, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+            return compileSelect((Select<?>) statement, dbmsSyntax, generateQueryMapping, readForeignFields, compileExpressions, modelReader);
+        } finally {
+            COMPILING_SCOPE_TOKEN.set(previous);
+        }
+    }
+
     private static final Map<Class<? extends Expression>, AbstractTermSqlCompiler<?>> termCompilers = new HashMap<>();
 
     static {
@@ -311,6 +337,8 @@ public final class ExpressionSqlCompiler {
 
     private static SqlBuild createSqlOrderBuild(DqlStatement dqlStatement, SqlClause sqlClause, DbmsSqlSyntax dbmsSyntax, SqlBuild parent, CompilerDomainModelReader modelReader, Integer forcedPositionalCount) {
         SqlBuild sqlBuild = new SqlBuild(parent, dqlStatement.getDomainClass(), dqlStatement.getDomainClassAlias(), sqlClause, dbmsSyntax, modelReader);
+        if (parent == null)
+            sqlBuild.setScopeToken(COMPILING_SCOPE_TOKEN.get());
         // Only the root: a subquery shares the statement's one parameter list, and asking it again would
         // count the same references twice. A union branch or a CTE body IS a root by this test, yet the
         // branches end up in ONE statement sharing ONE parameter list — so each is handed the maximum taken
@@ -372,6 +400,13 @@ public final class ExpressionSqlCompiler {
     private static SqlBuild buildCommonSqlOrder(DqlStatement dqlStatement, SqlBuild sqlBuild, boolean grouped, DbmsSqlSyntax dbmsSyntax, SqlBuild parent, SqlClause parentClause, CompilerDomainModelReader modelReader) {
         if (dqlStatement.getWhere() != null)
             compileExpression(dqlStatement.getWhere(), new Options(sqlBuild, SqlClause.WHERE, null, grouped, false, false, modelReader));
+        // Data scope. ANDed into the where of EVERY select the compiler builds, which is what makes it reach
+        // a subquery, a CTE body and each branch of a union without any of them being named here. Compiled
+        // like any other expression, so the denying reader sees every column it touches and its parameters
+        // are numbered alongside the caller's rather than spliced in as text.
+        Expression<?> scopeCondition = ClientReadScope.conditionFor(dqlStatement.getDomainClass(), sqlBuild.getScopeToken());
+        if (scopeCondition != null)
+            compileExpression(scopeCondition, new Options(sqlBuild, SqlClause.WHERE, " and ", grouped, false, false, modelReader));
         if (dqlStatement.getOrderBy() != null)
             compileExpression(dqlStatement.getOrderBy(), new Options(sqlBuild, SqlClause.ORDER_BY, ", ", grouped, false, false, modelReader));
         if (dqlStatement.getLimit() != null && dbmsSyntax != HsqlSyntax.get()) // temporary fix

@@ -59,10 +59,29 @@ public final class DataSourceModel implements HasDomainModel {
     }
 
     public SqlCompiled parseAndCompileSelect(String stringSelect, boolean compileExpressions) {
+        return parseAndCompileSelect(stringSelect, compileExpressions, null);
+    }
+
+    /**
+     * Compiles under a data scope, and caches per scope.
+     *
+     * <p><b>The token is part of the key, and that is not an optimisation.</b> This cache is keyed by the
+     * statement's TEXT, and two callers send identical text — so with scope injected and the key unchanged,
+     * the first caller's scope would be baked into the cached SQL and served to the second. That is the same
+     * trap as compiling a caller's identity to a literal, one level up, and it fails the same way: silently,
+     * and in the direction that hands one member's rows to another.
+     *
+     * <p>It stays bounded because a token names one of a fixed set of scopes, not one caller — which is the
+     * argument for named scopes over predicates assembled per request, showing up here as the reason the
+     * cache can exist at all.
+     */
+    public SqlCompiled parseAndCompileSelect(String stringSelect, boolean compileExpressions, Object scopeToken) {
         Map<String, SqlCompiled> cache = compileExpressions ? sqlCompiledWithExpressionsCache : sqlCompiledCache;
-        SqlCompiled sqlCompiled = cache.get(stringSelect);
+        String key = scopeToken == null ? stringSelect : scopeToken + "\u0000" + stringSelect;
+        SqlCompiled sqlCompiled = cache.get(key);
         if (sqlCompiled == null)
-            cache.put(stringSelect, sqlCompiled = compileSelectOrWithSelect(parseStatement(stringSelect), compileExpressions));
+            cache.put(key, sqlCompiled = ExpressionSqlCompiler.compileForScope(parseStatement(stringSelect), scopeToken,
+                    getDbmsSqlSyntax(), true, true, compileExpressions, getCompilerDomainModelReader()));
         return sqlCompiled;
     }
 
