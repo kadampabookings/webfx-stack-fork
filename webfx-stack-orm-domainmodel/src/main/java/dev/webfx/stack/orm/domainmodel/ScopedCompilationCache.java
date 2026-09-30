@@ -27,6 +27,17 @@ import java.util.Set;
  * throws on the first few requests is cheaper than one found later in a heap dump. It cannot fire while no
  * scope provider is registered, because an unscoped compilation has no token at all.
  *
+ * <p><b>Not synchronised, and that is safe by DEPLOYMENT rather than by design.</b> {@code VertxRunner}
+ * deploys one verticle with default options, so every handler it registers shares one event-loop context:
+ * compilation happens on a single thread, which the production logs bear out — every client-read line is
+ * {@code vert.x-eventloop-thread-1}. Nothing in the query path leaves that thread; {@code executeBlocking}
+ * appears only in the Stripe gateway, and these modules start no threads or executors of their own.
+ *
+ * <p>The change that would end that is {@code setInstances(n)} — the obvious way to use more cores, and a
+ * one-liner whose author has no reason to think about a cache. If it is ever made, this map and the two
+ * fields below it need revisiting first. Note that the codebase is not of one mind here: ClientReadInventory
+ * uses ConcurrentHashMap and AtomicLong throughout, so the convention cannot be read off the code.
+ *
  * <p>Not weakly or softly referenced. Weak keys would be collected almost at once — the key is a string
  * built per request and held by nothing else — so the cache would simply stop caching. Soft references clear
  * in bulk under memory pressure, which means every query recompiles at the moment the server is least able
