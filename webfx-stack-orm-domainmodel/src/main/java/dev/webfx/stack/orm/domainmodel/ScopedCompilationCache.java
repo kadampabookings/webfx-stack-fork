@@ -2,8 +2,10 @@ package dev.webfx.stack.orm.domainmodel;
 
 import dev.webfx.stack.orm.dql.sqlcompiler.sql.SqlCompiled;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -14,9 +16,10 @@ import java.util.Set;
  *
  * <p><b>Statements.</b> The key is text a CLIENT chooses, so a caller minting variants grows this without
  * limit — the hazard the read inventory caps itself against in as many words. It was unbounded before scope
- * existed; scope only multiplies it. Capped crudely, by clearing, which is the same trade the client-query
- * inspector already makes for the same reason: a statement costs one extra compile to earn its place back,
- * and an eviction policy that is subtler is also one more thing to be wrong.
+ * existed; scope only multiplies it. Capped by dropping the least recently used, which beats clearing in
+ * exactly the case the cap exists for: a caller minting statements evicts entries either way, but the
+ * application's own statements are used constantly and so survive, where clearing discards them alongside
+ * the noise and recompiles everything at once.
  *
  * <p><b>Scope tokens.</b> Bounded only if a token names one of a fixed set of scopes. Hand it something
  * caller-derived — an organization-id set, say — and the cache grows combinatorially with the callers. That
@@ -40,11 +43,39 @@ final class ScopedCompilationCache {
      */
     static final int MAX_SCOPE_TOKENS = 64;
 
-    /** Compiled statements held before the cache is cleared. */
+    /** Compiled statements held before the least recently used are dropped. */
     static final int MAX_COMPILED_STATEMENTS = 2000;
 
-    private final Map<String, SqlCompiled> compiled = new HashMap<>();
+    /** Dropped in one pass when full, so the scan is paid once per that many inserts rather than per insert. */
+    private static final int PURGE_FRACTION = 4; // a quarter
+
+    /**
+     * One compiled statement and when it was last wanted.
+     *
+     * <p>The mark is a field on the ENTRY, deliberately, and not the map's iteration order. An access-ordered
+     * map restructures itself on every {@code get}, which would turn each cache HIT into a structural write
+     * to a map that is not synchronised on a server that compiles from more than one thread — trading a
+     * stale read for a corrupted map. Writing a long races harmlessly: the loser costs an entry its place in
+     * the queue, and nothing else.
+     */
+    private static final class Entry {
+        final SqlCompiled compiled;
+        long lastUsed;
+
+        Entry(SqlCompiled compiled, long tick) {
+            this.compiled = compiled;
+            this.lastUsed = tick;
+        }
+    }
+
+    private final Map<String, Entry> compiled = new HashMap<>();
     private final Set<String> scopeTokens = new HashSet<>();
+    /**
+     * A logical clock, not a wall clock. Monotonic whatever the system time does, and two entries used in
+     * the same millisecond still order — which a timestamp would not give, and ties are exactly what an
+     * eviction order must not have.
+     */
+    private long tick;
 
     /** The cache key for a statement under a scope. Null token — the unscoped case — keys on the text alone. */
     static String keyOf(String statement, Object scopeToken) {
@@ -52,13 +83,32 @@ final class ScopedCompilationCache {
     }
 
     SqlCompiled get(String key) {
-        return compiled.get(key);
+        Entry entry = compiled.get(key);
+        if (entry == null)
+            return null;
+        entry.lastUsed = ++tick; // a hit is still wanted; only this field moves
+        return entry.compiled;
     }
 
     void put(String key, SqlCompiled sqlCompiled) {
         if (compiled.size() >= MAX_COMPILED_STATEMENTS)
-            compiled.clear(); // crude, but bounded; a statement costs one extra compile to re-earn
-        compiled.put(key, sqlCompiled);
+            purgeLeastRecentlyUsed();
+        compiled.put(key, new Entry(sqlCompiled, ++tick));
+    }
+
+    /**
+     * Drops the oldest {@link #PURGE_FRACTION}th. In one pass rather than one entry per insert, so the scan
+     * is amortised — and by selecting a threshold rather than sorting, which is the whole map's length again
+     * for no gain when all that is needed is "older than most".
+     */
+    private void purgeLeastRecentlyUsed() {
+        int dropCount = Math.max(1, compiled.size() / PURGE_FRACTION);
+        List<Long> marks = new ArrayList<>(compiled.size());
+        for (Entry entry : compiled.values())
+            marks.add(entry.lastUsed);
+        marks.sort(null);
+        long threshold = marks.get(Math.min(dropCount, marks.size() - 1));
+        compiled.entrySet().removeIf(e -> e.getValue().lastUsed <= threshold);
     }
 
     /**
@@ -89,5 +139,10 @@ final class ScopedCompilationCache {
 
     int size() {
         return compiled.size();
+    }
+
+    /** Whether this key is still held — for the checks, which need to see WHICH entries survived a purge. */
+    boolean holds(String key) {
+        return compiled.containsKey(key);
     }
 }

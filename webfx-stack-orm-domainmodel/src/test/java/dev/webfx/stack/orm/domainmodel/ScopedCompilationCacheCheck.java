@@ -28,11 +28,20 @@ public class ScopedCompilationCacheCheck {
         check("two scopes do not share one entry",
               !ScopedCompilationCache.keyOf("select 1", "scopeA").equals("select 1"));
 
-        // Statements: bounded against traffic, by clearing.
-        for (int i = 0; i <= ScopedCompilationCache.MAX_COMPILED_STATEMENTS; i++)
-            cache.put("statement " + i, compiled());
+        // Statements: bounded against traffic, by dropping the least recently used.
+        cache.put("the application's own statement", compiled());
+        for (int i = 0; i <= ScopedCompilationCache.MAX_COMPILED_STATEMENTS; i++) {
+            cache.put("minted variant " + i, compiled());
+            cache.get("the application's own statement"); // in constant use, as a real statement is
+        }
         check("the statement cache is bounded rather than growing without limit",
               cache.size() <= ScopedCompilationCache.MAX_COMPILED_STATEMENTS);
+        // The point of evicting by use rather than clearing: a caller minting statements must not cost the
+        // application the entries it depends on. Under clear-all this one was discarded with the noise.
+        check("a statement in constant use survives a flood of minted ones",
+              cache.holds("the application's own statement"));
+        check("and the flood's own oldest entries are the ones gone",
+              !cache.holds("minted variant 0"));
 
         // Scope tokens: no token at all is the case every statement is in today, and must cost nothing.
         for (int i = 0; i < 1000; i++)
