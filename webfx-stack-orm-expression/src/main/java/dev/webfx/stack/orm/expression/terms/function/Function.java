@@ -104,7 +104,12 @@ public class Function<T> {
         this.returnType = returnType;
         this.evaluable = evaluable != null ? evaluable : this instanceof AggregateFunction;
         this.keyword = keyword;
-        aggregate = "count".equalsIgnoreCase(name);
+        // An aggregate makes SelectBuilder use row_number() as the id of a select without GROUP BY (a bare
+        // id column next to an aggregate is invalid SQL). Before, only count was flagged: a CTE aggregating
+        // with min/max (or sum, string_agg) alone compiled to "column x.id must appear in the GROUP BY
+        // clause" (42803). Aggregate classes (Sum, StringAgg) are aggregates by type; SQL's built-in
+        // aggregates registered as plain functions are recognised by name.
+        aggregate = this instanceof AggregateFunction || isSqlAggregateName(name);
     }
 
     public String getName() {
@@ -129,6 +134,25 @@ public class Function<T> {
 
     public boolean isAggregate() {
         return aggregate;
+    }
+
+    // SQL's built-in aggregate functions that may be registered as plain Functions (a switch rather than
+    // Set.of, which this GWT-compiled module avoids).
+    private static boolean isSqlAggregateName(String name) {
+        if (name == null)
+            return false;
+        switch (name.toLowerCase()) {
+            case "count":
+            case "min":
+            case "max":
+            case "avg":
+            case "bool_and":
+            case "bool_or":
+            case "array_agg":
+                return true;
+            default:
+                return false;
+        }
     }
 
     public boolean isSqlExpressible() {
