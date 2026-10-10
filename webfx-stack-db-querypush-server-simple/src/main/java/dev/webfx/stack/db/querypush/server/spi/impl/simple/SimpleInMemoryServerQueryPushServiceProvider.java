@@ -151,6 +151,21 @@ public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQu
     }
 
     @Override
+    protected void resendPushClientStreams(Object clientRunId) {
+        boolean any = false;
+        for (StreamInfo streamInfo : streamInfos.values()) {
+            if (Objects.areEquals(streamInfo.clientRunId, clientRunId) && streamInfo.queryInfo != null) {
+                streamInfo.markAsResend();
+                // Reactivated bypasses the refresh throttle and pushes the cached result to "new" streams
+                streamInfo.queryInfo.markAsReactivated();
+                any = true;
+            }
+        }
+        if (any)
+            executePulse(null);
+    }
+
+    @Override
     protected Collection<QueryInfo> getQueryInfos() {
         // Defensive copy so the caller can iterate while streams keep being opened/closed
         return new ArrayList<>(queryInfos.values());

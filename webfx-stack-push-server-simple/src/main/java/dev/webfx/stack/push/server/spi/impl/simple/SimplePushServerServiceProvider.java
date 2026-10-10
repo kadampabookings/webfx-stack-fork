@@ -31,6 +31,17 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
 
     private final static boolean LOG_PUSH = true;
 
+    /**
+     * When to ping a client again after a push to it failed, before giving it up. A single failure used to
+     * give it up at once — and with it every query-push stream it had, server-side, without the client ever
+     * being told: it kept its socket and its "Connected" status, and every live list on its page froze on
+     * its last result (2026-10-10, a back office on a festival day: ten such failures in an hour, the last
+     * one permanent). A failure is often a moment, not an end — the client's bus address is briefly
+     * unregistered while its socket is replaced (NO_HANDLERS), or a reply goes astray on the old one — and
+     * the client is back seconds later on the same runId. So it gets about two minutes to answer a ping.
+     */
+    final static long[] UNREACHABLE_PROBE_DELAYS_MS = { 2_000, 5_000, 10_000, 20_000, 30_000, 60_000 };
+
     // ConcurrentHashMap: the monitor's snapshotConnectedClients() iterates this map while other event
     // loops mutate it (push() creates entries, pushFailed() removes them) — a plain HashMap would throw
     // ConcurrentModificationException under real multi-client load (breaking getMonitorInfo).
@@ -57,8 +68,14 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     @Override
     public void clientIsLive(Object clientRunId) {
         PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
-        if (pushClientInfo != null)
-            pushClientInfo.rescheduleNextPing();
+        if (pushClientInfo != null) {
+            // A client we could not reach has just spoken — typically its first message on a new socket.
+            // Ask it now rather than at the next probe, so its streams resume in a round trip.
+            if (pushClientInfo.isUnreachable())
+                pushClientInfo.probeNow();
+            else
+                pushClientInfo.rescheduleNextPing();
+        }
     }
 
     @Override
@@ -171,9 +188,24 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
             listener.onUnresponsivePushClient(clientRunId);
     }
 
-    private void pushFailed(Object clientRunId) {
-        pushClientInfos.remove(clientRunId);
-        firePushClientDisconnected(clientRunId);
+    private void firePushClientReachableAgain(Object clientRunId) {
+        Console.log("Push client reachable again: clientRunId = " + clientRunId);
+        for (UnresponsivePushClientListener listener : unresponsivePushClientListeners)
+            listener.onPushClientReachableAgain(clientRunId);
+    }
+
+    private void pushFailed(PushClientInfo pushClientInfo) {
+        // Only if the map still holds THIS entry — never evict a newer one created for the same runId.
+        if (pushClientInfos.remove(pushClientInfo.clientRunId, pushClientInfo))
+            firePushClientDisconnected(pushClientInfo.clientRunId);
+    }
+
+    /**
+     * The delay before the given probe of an unreachable client, or -1 when the probes are used up and the
+     * client must be given up. Its own method so the schedule can be checked without timers.
+     */
+    static long nextProbeDelay(int probeIndex) {
+        return probeIndex < UNREACHABLE_PROBE_DELAYS_MS.length ? UNREACHABLE_PROBE_DELAYS_MS[probeIndex] : -1;
     }
 
     private PushClientInfo getOrCreatePushClientInfo(Object clientRunId) {
@@ -208,6 +240,14 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         volatile String ownerSessionId;
         // So a caller retrying the same refused claim on every message logs one line, not thousands.
         volatile boolean familyClaimRefusalReported;
+        // Unreachable state, guarded by `this`: a push failed and the client has not answered since.
+        // 0 = reachable. While unreachable the regular ping chain is suspended and probes run instead.
+        private long unreachableSince;
+        private int probeIndex;
+        private Scheduled probeScheduled;
+        // One probe at a time: a client that keeps sending messages while unreachable must not fire a ping
+        // per message, which would spend the whole probe schedule in seconds.
+        private boolean probeInFlight;
 
         PushClientInfo(Object clientRunId) {
             this.clientRunId = clientRunId;
@@ -216,18 +256,86 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         void touchCalled() {
             pendingCalls++;
             lastCallTime = now();
-            rescheduleNextPing();
+            if (!isUnreachable())
+                rescheduleNextPing();
         }
 
         void touchReceived(Throwable error) {
             pendingCalls--;
             lastResultReceivedTime = now();
-            if (error == null)
+            if (error == null) {
+                if (markReachable())
+                    firePushClientReachableAgain(clientRunId);
                 rescheduleNextPing();
-            else {
-                cancelNextPing();
-                pushFailed(clientRunId);
+            } else
+                markUnreachable(error);
+        }
+
+        synchronized boolean isUnreachable() {
+            return unreachableSince != 0;
+        }
+
+        /** Enters the unreachable state on a failed push, once — later failures while in it change nothing. */
+        private void markUnreachable(Throwable error) {
+            synchronized (this) {
+                if (unreachableSince != 0)
+                    return;
+                unreachableSince = now();
+                probeIndex = 0;
             }
+            cancelNextPing();
+            Console.log("⚠ Push client unreachable, probing before giving it up: clientRunId = " + clientRunId + " (" + error.getMessage() + ")");
+            scheduleNextProbe();
+        }
+
+        /** Leaves the unreachable state; true when the client WAS unreachable (its streams need resending). */
+        private boolean markReachable() {
+            synchronized (this) {
+                if (unreachableSince == 0)
+                    return false;
+                unreachableSince = 0;
+                cancelProbe();
+                return true;
+            }
+        }
+
+        private void scheduleNextProbe() {
+            synchronized (this) {
+                if (unreachableSince == 0)
+                    return;
+                long delay = nextProbeDelay(probeIndex++);
+                if (delay >= 0) {
+                    cancelProbe();
+                    probeScheduled = Scheduler.scheduleDelay(delay, this::probeNow);
+                    return;
+                }
+            }
+            Console.log("Push client gave no answer to " + UNREACHABLE_PROBE_DELAYS_MS.length + " probes: clientRunId = " + clientRunId);
+            pushFailed(this);
+        }
+
+        void probeNow() {
+            synchronized (this) {
+                if (unreachableSince == 0 || probeInFlight)
+                    return;
+                probeInFlight = true;
+                cancelProbe();
+            }
+            // A success lands in touchReceived (reachable again); a failure schedules the next probe.
+            pushPing(new DeliveryOptions(), BusService.bus(), clientRunId)
+                .onComplete(ar -> {
+                    synchronized (this) {
+                        probeInFlight = false;
+                    }
+                    if (ar.failed())
+                        scheduleNextProbe();
+                });
+        }
+
+        private void cancelProbe() {
+            if (probeScheduled != null)
+                probeScheduled.cancel();
+            probeScheduled = null;
         }
 
         void rescheduleNextPing() {

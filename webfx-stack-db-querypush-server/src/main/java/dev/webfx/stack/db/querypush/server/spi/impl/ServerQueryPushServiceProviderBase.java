@@ -39,6 +39,7 @@ import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.db.querypush.spi.QueryPushServiceProvider;
 import dev.webfx.stack.push.server.PushClientMetadata;
 import dev.webfx.stack.push.server.PushServerService;
+import dev.webfx.stack.push.server.UnresponsivePushClientListener;
 import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.RestrictedPrincipalRegistry;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
@@ -69,7 +70,17 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     private PulsePass pulsePass;
 
     protected ServerQueryPushServiceProviderBase() {
-        PushServerService.addUnresponsivePushClientListener(this::removePushClientStreams);
+        PushServerService.addUnresponsivePushClientListener(new UnresponsivePushClientListener() {
+            @Override
+            public void onUnresponsivePushClient(Object clientRunId) {
+                removePushClientStreams(clientRunId);
+            }
+
+            @Override
+            public void onPushClientReachableAgain(Object clientRunId) {
+                resendPushClientStreams(clientRunId);
+            }
+        });
     }
 
     @Override
@@ -110,6 +121,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
     protected abstract void removeStream(StreamInfo streamInfo);
 
     protected abstract void removePushClientStreams(Object clientRunId);
+
+    /**
+     * Pushes every stream of this client again in full, at once — called when a client whose pushes had
+     * failed answers again. What was pushed while it could not hear is lost, and the next change to each
+     * query may be a long way off; without this, its lists would stay on whatever reached it last.
+     */
+    protected abstract void resendPushClientStreams(Object clientRunId);
 
     /** Returns a snapshot of all registered QueryInfos (one per distinct QueryArgument) for monitoring. */
     protected abstract Collection<QueryInfo> getQueryInfos();
@@ -859,7 +877,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
                     else {
                         Console.log("Result push failed :" + cause.getMessage());
                         pushedFailed++;
-                        removeStream(streamInfo);
+                        // Keep the stream: the push server now probes an unreachable client before giving
+                        // it up (and removes its streams through onUnresponsivePushClient if it never
+                        // answers). Removing it here dropped it for good on a single failed push, while
+                        // the client — never told — kept showing this query's last result. Forget what was
+                        // sent instead, so the next push to it is a full result rather than a diff against
+                        // a result it may never have received.
+                        streamInfo.markAsResend();
                     }
                 });
         }
@@ -1147,8 +1171,10 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         }
 
         public void markAsResend() {
-            // Forgetting lastQueryResult will force to send the whole result on next push
+            // Forgetting lastQueryResult will force to send the whole result on next push — with its
+            // entity mapping, in case the push that carried it is the one that was lost
             lastQueryResult = null;
+            entityMappingSent = false;
         }
     }
 
