@@ -500,7 +500,12 @@ public final class ServerSideStateSessionSyncer {
      * leaving it whole is confined to that machine too: there, a client that ignores its own successor is
      * excused for longer than the scaled access window.
      */
-    private static final long PENDING_DELIVERY_GRACE_MILLIS = SessionLifetime.ACCESS_WINDOW_BASE_MILLIS;
+    // Package-private so GraceAlignmentCheck can assert it against SessionLifetime.REUSE_GRACE_MILLIS.
+    // The two excuse the same thing — a holder on the token a renewal has just replaced — and they MUST
+    // stay equal: this one applies when the server remembers minting the successor, the other when it
+    // does not, and a holder should not be killed over which of those is true. They disagreed until
+    // 2026-10-11 and it ended 42 families in a day. See the comment on REUSE_GRACE_MILLIS.
+    static final long PENDING_DELIVERY_GRACE_MILLIS = SessionLifetime.ACCESS_WINDOW_BASE_MILLIS;
 
     private static final int PENDING_TOKEN_CAP = 20_000;
     private static final Map<String, PendingToken> pendingRenewedTokens = Collections.synchronizedMap(

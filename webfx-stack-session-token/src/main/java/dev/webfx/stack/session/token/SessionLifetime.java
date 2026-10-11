@@ -196,14 +196,31 @@ public final class SessionLifetime {
      * open would be killed as a suspected theft. Inside the grace the loser is simply handed the current
      * token instead, with no increment, so both tabs converge.
      *
-     * <p>It is a genuine weakening: a thief renewing within a minute of the real client is tolerated.
+     * <p>It is a genuine weakening: a thief renewing within the grace of the real client is tolerated.
      * That is the trade, and it is the right way round — a false kill is certain and frequent, a theft
-     * landing inside the same sixty seconds is neither.
+     * landing inside the same window is neither. What bounds the thief is not this number but the rest
+     * of the design: the family is still revoked the moment anybody deliberately ends it, and the
+     * stolen token still expires with its access window.
      */
-    public static final long REUSE_GRACE_MILLIS = 60 * 1000L; // 1 minute — deliberately NOT scaled
-    // It measures a race between two browser tabs and a network round trip, not the length of a session,
-    // so shrinking it with everything else would make an ordinary second tab look like a theft on a
-    // developer's machine and nowhere else — a test environment reporting a failure that does not exist.
+    // ONE ACCESS WINDOW, and the same number the syncer's pending-delivery grace uses, deliberately:
+    // both excuse exactly one thing — a holder still presenting the token a renewal has just replaced —
+    // and they disagreed. When the server happened to remember minting the successor the holder got
+    // thirty minutes (ServerSideStateSessionSyncer.PENDING_DELIVERY_GRACE_MILLIS); when it did not —
+    // a reconnect onto a different server session, an eviction from the pending map, another instance —
+    // it got sixty seconds and then the family was killed. The outcome turned on whether a hash map had
+    // survived, which is not a security property.
+    //
+    // Measured on production over 2026-10-10/11: 42 families ended this way in a day, 40 different
+    // people, every one of them front office, and 39 of the 42 were behind by EXACTLY ONE generation.
+    // One was refused fifteen milliseconds past the old minute. That is not theft, it is a second tab.
+    //
+    // Aligning grants a thief nothing the pending grace did not already grant them whenever the entry
+    // existed; it removes a difference, it does not add tolerance. Still unscaled, for the reason below.
+    public static final long REUSE_GRACE_MILLIS = ACCESS_WINDOW_BASE_MILLIS;
+    // Unscaled: it measures a race between two browser tabs and a network round trip, not the length of
+    // a session, so shrinking it with everything else would make an ordinary second tab look like a
+    // theft on a developer's machine and nowhere else — a test environment reporting a failure that
+    // does not exist.
 
     /** When a token minted now stops being usable without renewal — the alarm's short window while raised. */
     public static long accessExpiryFrom(long nowMillis) {
