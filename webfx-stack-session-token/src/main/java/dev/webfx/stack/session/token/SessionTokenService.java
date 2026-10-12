@@ -59,6 +59,24 @@ public final class SessionTokenService {
      * than either, so it is logged as the reduction in protection that it is.
      */
     public static Future<String> mintForLogin(Object principal, boolean backofficeSession) {
+        // The one moment the audience is decided. After this it rides inside the signature and the
+        // caller cannot change it, which is the whole of what the claim buys — see SessionAudience.
+        return mintForLogin(principal, backofficeSession, SessionAudience.ofBackofficeFlag(backofficeSession));
+    }
+
+    /**
+     * As above, for a login whose audience is a property of the METHOD rather than of the connection.
+     *
+     * <p>Only the two view-as redeems need this. Each refuses the wrong context before it reaches here,
+     * so the flag already implies the right audience today — but it implies it by way of a refusal
+     * written somewhere else, and nothing ties the two together. Stating the audience makes the pass's
+     * own nature the source, so relaxing that refusal later cannot quietly freeze the wrong one into a
+     * signature.
+     *
+     * @param audience what this session is FOR, where the flag is not the authority on it
+     */
+    public static Future<String> mintForLogin(Object principal, boolean backofficeSession,
+                                              SessionAudience audience) {
         if (principal == null || !SignedToken.isConfigured())
             return Future.succeededFuture(null);
         long now = System.currentTimeMillis();
@@ -66,13 +84,13 @@ public final class SessionTokenService {
         long absoluteExpiry = now + SessionLifetime.absoluteLifetimeMillis(tier);
         SessionFamilyStore store = SessionFamilyStoreRegistry.getStore();
         if (store == null)
-            return Future.succeededFuture(mintQuietly(principal, null, 0, tier, absoluteExpiry, now));
+            return Future.succeededFuture(mintQuietly(principal, null, 0, tier, audience, absoluteExpiry, now));
         return store.open(principal, tier, absoluteExpiry)
-            .map(familyId -> mintQuietly(principal, familyId, 0, tier, absoluteExpiry, now, store))
+            .map(familyId -> mintQuietly(principal, familyId, 0, tier, audience, absoluteExpiry, now, store))
             .otherwise(e -> {
                 Console.log("⚠️ Could not open a session family — this session cannot be rotated and a stolen"
                             + " copy of its token will not be detected: " + e);
-                return mintQuietly(principal, null, 0, tier, absoluteExpiry, now);
+                return mintQuietly(principal, null, 0, tier, audience, absoluteExpiry, now);
             });
     }
 
@@ -92,6 +110,18 @@ public final class SessionTokenService {
         if (presented == null || !SignedToken.isConfigured())
             return Future.succeededFuture(TokenRenewal.KEEP);
         SessionTier tier = presented.isLegacy() ? tierHint : presented.tier();
+        // Carried forward, NEVER re-read from the connection: re-deriving it here would hand a caller
+        // back the per-message flag the claim exists to replace, and a session could change audience by
+        // asking.
+        //
+        // Note that it deliberately does NOT follow tierHint the way the tier above does, and a legacy
+        // token is where the difference bites: it carries no audience, so it is read as FRONT_OFFICE and
+        // stays there, even on a connection whose hint says back office. Taking the hint would be the
+        // escalation this claim exists to close — present an old front-office token on a connection
+        // claiming `backoffice`, and walk away with one stamped `bo`, having passed none of the
+        // conditions a back-office login imposes. The tier can take the hint safely because every value
+        // it might adopt SHORTENS the session; an audience grants.
+        SessionAudience audience = presented.audience();
         SessionFamilyStore store = SessionFamilyStoreRegistry.getStore();
 
         // No family yet: a token minted before families existed, or by a server that had no store at the
@@ -105,16 +135,16 @@ public final class SessionTokenService {
                 return Future.succeededFuture(TokenRenewal.ENDED);
             if (store == null)
                 return Future.succeededFuture(TokenRenewal.renewed(
-                    mintQuietly(presented.principal(), null, 0, tier, absoluteExpiry, nowMillis)));
+                    mintQuietly(presented.principal(), null, 0, tier, audience, absoluteExpiry, nowMillis)));
             return store.open(presented.principal(), tier, absoluteExpiry)
                 .map(familyId -> TokenRenewal.renewed(
-                    mintQuietly(presented.principal(), familyId, 0, tier, absoluteExpiry, nowMillis)))
+                    mintQuietly(presented.principal(), familyId, 0, tier, audience, absoluteExpiry, nowMillis)))
                 // Same reasoning as at login: a family that cannot be opened costs rotation, not the
                 // session. Sliding it forward keeps the user working and the upgrade is retried later.
                 .otherwise(e -> {
                     Console.log("⚠️ Could not open a session family while upgrading a token: " + e);
                     return TokenRenewal.renewed(
-                        mintQuietly(presented.principal(), null, 0, tier, absoluteExpiry, nowMillis));
+                        mintQuietly(presented.principal(), null, 0, tier, audience, absoluteExpiry, nowMillis));
                 });
         }
 
@@ -125,13 +155,13 @@ public final class SessionTokenService {
             Console.log("⚠️ A token names a session family but no store is registered — rotation and reuse"
                         + " detection are NOT in effect for it");
             return Future.succeededFuture(TokenRenewal.renewed(mintQuietly(presented.principal(),
-                presented.familyId(), presented.generation(), tier, presented.absoluteExpiryMillis(), nowMillis)));
+                presented.familyId(), presented.generation(), tier, audience, presented.absoluteExpiryMillis(), nowMillis)));
         }
 
         return store.renew(presented.familyId(), presented.generation(), nowMillis)
             .compose(renewal -> switch (renewal.verdict()) {
                 case RENEWED, CURRENT -> Future.succeededFuture(TokenRenewal.renewed(
-                    mintQuietly(presented.principal(), presented.familyId(), renewal.generation(), tier,
+                    mintQuietly(presented.principal(), presented.familyId(), renewal.generation(), tier, audience,
                         renewal.absoluteExpiryMillis(), nowMillis)));
                 case REUSE_DETECTED -> {
                     // Two holders, and there is no way to tell from here which one is the member. Killing
@@ -385,8 +415,8 @@ public final class SessionTokenService {
      * in full, because either one is a defect rather than a condition.
      */
     private static String mintQuietly(Object principal, String familyId, int generation, SessionTier tier,
-                                      long absoluteExpiryMillis, long nowMillis) {
-        return mintQuietly(principal, familyId, generation, tier, absoluteExpiryMillis, nowMillis, null);
+                                      SessionAudience audience, long absoluteExpiryMillis, long nowMillis) {
+        return mintQuietly(principal, familyId, generation, tier, audience, absoluteExpiryMillis, nowMillis, null);
     }
 
     /**
@@ -398,9 +428,10 @@ public final class SessionTokenService {
      *                    opened, or where the family is one that already exists.
      */
     private static String mintQuietly(Object principal, String familyId, int generation, SessionTier tier,
-                                      long absoluteExpiryMillis, long nowMillis, SessionFamilyStore storeToTidy) {
+                                      SessionAudience audience, long absoluteExpiryMillis, long nowMillis,
+                                      SessionFamilyStore storeToTidy) {
         try {
-            return PrincipalToken.mint(principal, familyId, generation, tier, absoluteExpiryMillis, nowMillis);
+            return PrincipalToken.mint(principal, familyId, generation, tier, audience, absoluteExpiryMillis, nowMillis);
         } catch (Exception e) {
             Console.log("⚠️ Could not mint an identity token for " + principal.getClass().getSimpleName() + ": " + e);
             if (storeToTidy != null && familyId != null)

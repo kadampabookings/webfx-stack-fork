@@ -43,12 +43,30 @@ public final class AuthenticatedState {
      *                          would quietly get the front office's year-long lifetime.
      */
     public static Future<Object> createFor(Object principal, boolean backofficeSession) {
+        return createFor(principal, backofficeSession, SessionAudience.ofBackofficeFlag(backofficeSession));
+    }
+
+    /**
+     * As above, where the audience is settled by the method doing the authenticating rather than by the
+     * connection it arrived on.
+     *
+     * <p>The two view-as redeems, and nothing else. A support-view pass opens the FRONT office and a
+     * back-office-view pass opens the BACK office, by their own definition — each refuses the other
+     * context before reaching here, so the flag agrees with that today, but it agrees by way of a check
+     * written elsewhere. Saying it here means the pass's nature is what gets signed.
+     *
+     * @param backofficeSession still the authority on the LIFETIME tier, which is a separate question —
+     *                          see {@link SessionAudience} on why one field cannot answer both
+     * @param audience          what this session is for, frozen into the token from this moment
+     */
+    public static Future<Object> createFor(Object principal, boolean backofficeSession,
+                                           SessionAudience audience) {
         Object state = StateAccessor.createUserIdState(principal);
         if (!SignedToken.isConfigured()) {
             reportMissingKeyOnce();
             return Future.succeededFuture(state);
         }
-        return SessionTokenService.mintForLogin(principal, backofficeSession)
+        return SessionTokenService.mintForLogin(principal, backofficeSession, audience)
             .map(token -> token == null ? state : StateAccessor.setUserToken(state, token))
             // A login must not fail because the machinery behind the token did. Nothing verifies tokens
             // strictly yet, so a missing one costs nothing today; that reverses at the flip, and the log

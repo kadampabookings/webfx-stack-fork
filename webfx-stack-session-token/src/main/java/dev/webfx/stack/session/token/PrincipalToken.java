@@ -70,6 +70,8 @@ public final class PrincipalToken {
     private static final String ABSOLUTE_EXPIRY_KEY = "$abs";
     /** Which lifetime policy this session was opened under — see {@link SessionTier}. */
     private static final String TIER_KEY = "$tier";
+    /** Which app this session was established FOR — see {@link SessionAudience}. */
+    private static final String AUDIENCE_KEY = "$aud";
 
     private PrincipalToken() {}
 
@@ -87,7 +89,7 @@ public final class PrincipalToken {
      * @param nowMillis           the minting time, passed in so lifetimes are testable without waiting
      */
     public static String mint(Object principal, String familyId, int generation, SessionTier tier,
-                              long absoluteExpiryMillis, long nowMillis) {
+                              SessionAudience audience, long absoluteExpiryMillis, long nowMillis) {
         if (principal == null)
             return null;
         Object encoded = SerialCodecManager.encodeToJson(principal);
@@ -103,6 +105,10 @@ public final class PrincipalToken {
         payload.set(ACCESS_EXPIRY_KEY, SessionLifetime.accessExpiryFrom(nowMillis));
         payload.set(ABSOLUTE_EXPIRY_KEY, absoluteExpiryMillis);
         payload.set(TIER_KEY, tier.code());
+        // Written whenever we have one, which at mint time is always: the audience is settled by the
+        // credential check that just happened, and this is the moment it stops being changeable.
+        if (audience != null)
+            payload.set(AUDIENCE_KEY, audience.code());
         return SignedToken.mint(Json.formatObject(payload), SessionLifetime.signedExpiryFrom(nowMillis, tier, absoluteExpiryMillis));
     }
 
@@ -142,6 +148,12 @@ public final class PrincipalToken {
         // — which is precisely how it behaved before this field existed.
         long accessExpiry = payload.getLong(ACCESS_EXPIRY_KEY, verified.expiryMillis());
         long absoluteExpiry = payload.getLong(ABSOLUTE_EXPIRY_KEY, verified.expiryMillis());
+        // A token minted before this claim existed falls back to its tier, which for the two values they
+        // share was derived from the same flag at the same moment. Never null, so no caller has to decide
+        // what an absent audience means — and the fallback grants the least where it is ambiguous.
+        SessionAudience audience = SessionAudience.fromCode(payload.getString(AUDIENCE_KEY));
+        if (audience == null)
+            audience = SessionAudience.ofLegacyTier(tier);
         return new IdentityToken(
             principal,
             payload.getString(FAMILY_ID_KEY),
@@ -149,7 +161,8 @@ public final class PrincipalToken {
             accessExpiry,
             verified.expiryMillis(),
             absoluteExpiry,
-            tier);
+            tier,
+            audience);
     }
 
     /**

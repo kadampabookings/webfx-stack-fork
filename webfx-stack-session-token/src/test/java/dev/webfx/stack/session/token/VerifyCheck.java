@@ -55,7 +55,8 @@ public class VerifyCheck {
 
     /** A token whose SESSION ends at the given moment, minted the way a login mints one. */
     static String mint(Object principal, long sessionEndMillis) {
-        return PrincipalToken.mint(principal, null, 0, SessionTier.FRONT_OFFICE, sessionEndMillis, System.currentTimeMillis());
+        return PrincipalToken.mint(principal, null, 0, SessionTier.FRONT_OFFICE, SessionAudience.FRONT_OFFICE,
+                                   sessionEndMillis, System.currentTimeMillis());
     }
 
     public static void main(String[] a) {

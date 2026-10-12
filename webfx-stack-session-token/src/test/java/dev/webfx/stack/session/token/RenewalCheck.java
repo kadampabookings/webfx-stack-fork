@@ -127,6 +127,22 @@ public class RenewalCheck {
               staff.absoluteExpiryMillis() - System.currentTimeMillis() < 2 * 24 * 3600_000L);
         check("a front-office login is tiered FRONT_OFFICE", first.tier() == SessionTier.FRONT_OFFICE);
 
+        System.out.println("the audience is settled at login, and no renewal moves it:");
+        // What M0 buys, stated as a test. The `backoffice` flag is re-asserted on every message, so the
+        // question is whether a caller can renew their way from one audience into the other by claiming
+        // differently. Note the helper: renew() here always hints FRONT_OFFICE, standing in for a
+        // connection now claiming to be the front office.
+        FakeStore unmoved = new FakeStore();
+        SessionFamilyStoreRegistry.register(unmoved);
+        IdentityToken boLogin = PrincipalToken.verify(SessionTokenService.mintForLogin(user, true).result(), NOW);
+        check("a back-office login is minted FOR the back office",
+              boLogin.audience() == SessionAudience.BACK_OFFICE);
+        long boLater = System.currentTimeMillis() + SessionLifetime.accessWindowMillis() + 1;
+        IdentityToken boRenewed = PrincipalToken.verify(renew(boLogin, boLater).token(), boLater);
+        check("and its renewal is still a back-office session, whatever the connection now says",
+              boRenewed.audience() == SessionAudience.BACK_OFFICE);
+
+        SessionFamilyStoreRegistry.register(store);
         System.out.println("the access window is short, and the SESSION is not:");
         long minted = System.currentTimeMillis();
         check("renewal falls due inside the last quarter of the window",
@@ -215,6 +231,22 @@ public class RenewalCheck {
         check("the same person is carried forward, not a new one", user.equals(now.principal()));
         check("it now has a family to rotate in", now.familyId() != null);
         check("and a tier", now.tier() == SessionTier.FRONT_OFFICE);
+        check("and the audience that grants least, since it proved none",
+              now.audience() == SessionAudience.FRONT_OFFICE);
+
+        // The one case where the audience and the tier must part company, and the escalation M0 closes.
+        // The hint is the client's own `backoffice` claim. The tier may take it — every value it could
+        // adopt only SHORTENS the session — but an audience taken from it would let anyone holding an
+        // old front-office token renew it into a back-office one, having passed no back-office condition
+        // on the way: no second factor, no account check. If this ever starts passing bo, that is the
+        // hole reopening.
+        SessionFamilyStoreRegistry.register(new FakeStore());
+        IdentityToken hinted = PrincipalToken.verify(
+            SessionTokenService.renew(legacyIdentity, SessionTier.BACK_OFFICE, NOW).result().token(), NOW);
+        check("a back-office HINT still moves the tier, which is safe", hinted.tier() == SessionTier.BACK_OFFICE);
+        check("but NEVER the audience — that would be an escalation by claim",
+              hinted.audience() == SessionAudience.FRONT_OFFICE);
+        SessionFamilyStoreRegistry.register(upgrade);
 
         System.out.println("logging out ends the family, not just the caller's copy of the token:");
         FakeStore out = new FakeStore();

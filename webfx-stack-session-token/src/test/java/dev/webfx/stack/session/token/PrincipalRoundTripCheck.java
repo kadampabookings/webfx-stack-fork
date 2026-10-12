@@ -34,7 +34,8 @@ public class PrincipalRoundTripCheck {
     }
     /** A token whose SESSION ends at NOW + 60s, whatever its access window says. */
     static String mint(Object principal) {
-        return PrincipalToken.mint(principal, null, 0, SessionTier.FRONT_OFFICE, NOW + 60_000, NOW);
+        return PrincipalToken.mint(principal, null, 0, SessionTier.FRONT_OFFICE, SessionAudience.FRONT_OFFICE,
+                                   NOW + 60_000, NOW);
     }
     static Object principalOf(String token, long nowMillis) {
         IdentityToken identity = PrincipalToken.verify(token, nowMillis);
@@ -54,14 +55,38 @@ public class PrincipalRoundTripCheck {
         check("token does not expose the person id in the clear", !token.contains("42"));
 
         System.out.println("session bookkeeping rides beside the principal, not inside it:");
-        String familyToken = PrincipalToken.mint(user, "fam-1", 4, SessionTier.BACK_OFFICE, NOW + 3_600_000, NOW);
+        String familyToken = PrincipalToken.mint(user, "fam-1", 4, SessionTier.BACK_OFFICE,
+                                                 SessionAudience.BACK_OFFICE, NOW + 3_600_000, NOW);
         IdentityToken identity = PrincipalToken.verify(familyToken, NOW);
         check("the family comes back", "fam-1".equals(identity.familyId()));
         check("the generation comes back", identity.generation() == 4);
         check("the tier comes back", identity.tier() == SessionTier.BACK_OFFICE);
+        check("the audience comes back", identity.audience() == SessionAudience.BACK_OFFICE);
         check("the absolute bound comes back", identity.absoluteExpiryMillis() == NOW + 3_600_000);
         check("the principal is UNAFFECTED by the extra keys", user.equals(identity.principal()));
         check("it is not read as a legacy token", !identity.isLegacy());
+
+        // The reason the audience is its own field and not read off the tier, and the ONLY shape that can
+        // prove the claim is being read at all: a pair the tier fallback would get WRONG. Where the two
+        // agree — a bo tier with a bo audience — an implementation that never writes $aud passes just the
+        // same, because ofLegacyTier would guess it correctly. A support view on a back-office connection
+        // is the real divergence: thirty minutes of life, and back-office privileges. Do not "simplify"
+        // this pair to a matching one; that is how both of these stop testing anything.
+        System.out.println("the audience is read from the signature, not guessed from the tier:");
+        String supportToken = PrincipalToken.mint(user, "fam-2", 0, SessionTier.SUPPORT_VIEW,
+                                                  SessionAudience.BACK_OFFICE, NOW + 1_800_000, NOW);
+        IdentityToken support = PrincipalToken.verify(supportToken, NOW);
+        check("a support-view tier keeps its own short life", support.tier() == SessionTier.SUPPORT_VIEW);
+        check("and its audience is the one it was minted with, which the tier does NOT imply",
+              support.audience() == SessionAudience.BACK_OFFICE);
+
+        // What a token minted by the other half of a blue/green pair looks like: tiers but no $aud yet.
+        // Here the fallback IS the right answer, and this pins which way it falls.
+        System.out.println("a token with a tier but no audience falls back to the tier:");
+        String noAud = SignedToken.mint("{\"$codec\":\"CheckPrincipal\",\"personId\":42,\"accountId\":7,"
+                                        + "\"$tier\":\"" + SessionTier.BACK_OFFICE.code() + "\"}", NOW + 60_000);
+        check("a back-office tier reads as a back-office audience",
+              PrincipalToken.verify(noAud, NOW).audience() == SessionAudience.BACK_OFFICE);
 
         System.out.println("a token from before any of that still works — the blue/green case:");
         // Exactly what the previous implementation minted: the encoded principal and nothing else.
@@ -72,6 +97,25 @@ public class PrincipalRoundTripCheck {
         check("has no family to rotate", legacyIdentity.familyId() == null);
         check("its access window is its whole life, as it always was",
               legacyIdentity.accessExpiryMillis() == NOW + 60_000);
+        // It carries no $aud, so the audience is read off the tier — and a legacy token has no tier
+        // either. Front office is the answer that grants least, which is what an unknown must get.
+        check("is read as a front-office session, the audience that grants least",
+              legacyIdentity.audience() == SessionAudience.FRONT_OFFICE);
+
+        // The OTHER direction of the blue/green contract, and the one no other case covers: an instance
+        // that predates a claim reading a token that carries it. It cannot be tested by running the old
+        // code, so it is tested in the form that matters — an unknown $-prefixed key must be inert. This
+        // is what makes it safe to add the NEXT claim ($amr) without a flag day, and what would break if
+        // a codec ever started reading keys it does not own.
+        System.out.println("a claim this build has never heard of is inert — the other blue/green direction:");
+        String fromTheFuture = SignedToken.mint(
+            "{\"$codec\":\"CheckPrincipal\",\"personId\":42,\"accountId\":7,\"$tier\":\"fo\","
+            + "\"$aud\":\"bo\",\"$amr\":[\"pwd\",\"totp\"],\"$whatever\":{\"nested\":true}}", NOW + 60_000);
+        IdentityToken future = PrincipalToken.verify(fromTheFuture, NOW);
+        check("the token still verifies", future != null);
+        check("and still names the same principal", user.equals(future.principal()));
+        check("the claims it DOES know are read correctly past the ones it does not",
+              future.tier() == SessionTier.FRONT_OFFICE && future.audience() == SessionAudience.BACK_OFFICE);
 
         System.out.println("forgery and expiry, through the principal layer:");
         check("expired token yields no principal", principalOf(token, NOW + 60_000) == null);
