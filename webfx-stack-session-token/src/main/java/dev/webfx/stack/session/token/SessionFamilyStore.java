@@ -173,7 +173,8 @@ public interface SessionFamilyStore {
         /**
          * The presented generation was retired moments ago, inside the reuse grace. Almost always a
          * second tab that lost the race, so the family is NOT killed and the caller is handed the
-         * current generation instead — see {@link SessionLifetime#REUSE_GRACE_MILLIS}.
+         * current generation instead: a holder exactly one generation behind is the only holder anybody
+         * has heard from, since a generation advances only when the one before it is presented.
          */
         CURRENT,
         /** A generation retired long enough ago that a second holder is the likeliest explanation. */

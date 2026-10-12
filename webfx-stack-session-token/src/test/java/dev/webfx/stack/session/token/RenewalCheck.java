@@ -66,7 +66,9 @@ public class RenewalCheck {
             }
             if (presentedGeneration > family.generation)
                 return Future.succeededFuture(FamilyRenewal.ended());
-            if (nowMillis - family.lastRenewed <= SessionLifetime.REUSE_GRACE_MILLIS)
+            // Mirrors ModalityAuthSessionStore.classify: one behind is the only holder anybody has heard
+            // from, more than one means somebody else has presented a later generation
+            if (presentedGeneration == family.generation - 1)
                 return Future.succeededFuture(new FamilyRenewal(Verdict.CURRENT, family.generation, family.absoluteExpiry));
             return Future.succeededFuture(FamilyRenewal.reuseDetected());
         }
@@ -146,8 +148,11 @@ public class RenewalCheck {
         check("next generation", second.generation() == first.generation() + 1);
         check("usable again", second.isWithinAccessWindow(later));
 
-        System.out.println("the retired token, presented again once the grace has passed:");
-        long muchLater = later + SessionLifetime.REUSE_GRACE_MILLIS + 1;
+        // Renew once more, so the family moves TWO generations past the token held below. One behind is
+        // forgiven by design; two means somebody else has presented a later generation.
+        renew(second, later + 1);
+        System.out.println("the retired token, once another generation has been claimed:");
+        long muchLater = later + 2;
         SessionTokenService.TokenRenewal reuse = renew(first, muchLater);
         check("the session is ENDED, not merely refused this once",
               reuse.outcome() == SessionTokenService.TokenRenewal.Outcome.ENDED);

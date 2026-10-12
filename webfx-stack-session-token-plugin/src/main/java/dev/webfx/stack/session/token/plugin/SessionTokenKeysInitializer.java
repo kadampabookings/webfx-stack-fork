@@ -143,7 +143,7 @@ public final class SessionTokenKeysInitializer implements ApplicationJob {
                     + " / absolute " + seconds(SessionLifetime.absoluteLifetimeMillis(SessionTier.BACK_OFFICE))
                     + "; front office idle " + seconds(SessionLifetime.idleWindowMillis(SessionTier.FRONT_OFFICE))
                     + " / absolute " + seconds(SessionLifetime.absoluteLifetimeMillis(SessionTier.FRONT_OFFICE))
-                    + "; reuse grace " + seconds(SessionLifetime.REUSE_GRACE_MILLIS) + " (not scaled)."
+                    + "; a retired generation is judged by how far behind it is, not by a clock."
                     // A session opened before this boot keeps the absolute bound it was opened with — the store
                     // hands it back on every renewal — so without this, the cap is tested on a session it
                     // does not apply to and the banner that should come never does.
