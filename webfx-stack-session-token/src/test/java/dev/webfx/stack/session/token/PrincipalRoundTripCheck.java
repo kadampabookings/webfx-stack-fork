@@ -35,7 +35,7 @@ public class PrincipalRoundTripCheck {
     /** A token whose SESSION ends at NOW + 60s, whatever its access window says. */
     static String mint(Object principal) {
         return PrincipalToken.mint(principal, null, 0, SessionTier.FRONT_OFFICE, SessionAudience.FRONT_OFFICE,
-                                   NOW + 60_000, NOW);
+                                   SessionMethod.of(SessionMethod.PASSWORD), NOW + 60_000, NOW);
     }
     static Object principalOf(String token, long nowMillis) {
         IdentityToken identity = PrincipalToken.verify(token, nowMillis);
@@ -56,12 +56,16 @@ public class PrincipalRoundTripCheck {
 
         System.out.println("session bookkeeping rides beside the principal, not inside it:");
         String familyToken = PrincipalToken.mint(user, "fam-1", 4, SessionTier.BACK_OFFICE,
-                                                 SessionAudience.BACK_OFFICE, NOW + 3_600_000, NOW);
+                                                 SessionAudience.BACK_OFFICE,
+                                                 SessionMethod.of(SessionMethod.PASSWORD, SessionMethod.TOTP),
+                                                 NOW + 3_600_000, NOW);
         IdentityToken identity = PrincipalToken.verify(familyToken, NOW);
         check("the family comes back", "fam-1".equals(identity.familyId()));
         check("the generation comes back", identity.generation() == 4);
         check("the tier comes back", identity.tier() == SessionTier.BACK_OFFICE);
         check("the audience comes back", identity.audience() == SessionAudience.BACK_OFFICE);
+        check("both methods come back, and only those",
+              identity.methods().equals(SessionMethod.of(SessionMethod.PASSWORD, SessionMethod.TOTP)));
         check("the absolute bound comes back", identity.absoluteExpiryMillis() == NOW + 3_600_000);
         check("the principal is UNAFFECTED by the extra keys", user.equals(identity.principal()));
         check("it is not read as a legacy token", !identity.isLegacy());
@@ -74,11 +78,38 @@ public class PrincipalRoundTripCheck {
         // this pair to a matching one; that is how both of these stop testing anything.
         System.out.println("the audience is read from the signature, not guessed from the tier:");
         String supportToken = PrincipalToken.mint(user, "fam-2", 0, SessionTier.SUPPORT_VIEW,
-                                                  SessionAudience.BACK_OFFICE, NOW + 1_800_000, NOW);
+                                                  SessionAudience.BACK_OFFICE,
+                                                  SessionMethod.of(SessionMethod.SUPPORT_VIEW_PASS),
+                                                  NOW + 1_800_000, NOW);
         IdentityToken support = PrincipalToken.verify(supportToken, NOW);
         check("a support-view tier keeps its own short life", support.tier() == SessionTier.SUPPORT_VIEW);
         check("and its audience is the one it was minted with, which the tier does NOT imply",
               support.audience() == SessionAudience.BACK_OFFICE);
+
+        System.out.println("the methods are a set, canonically encoded, and never inferred:");
+        // One set, one encoding, whatever order the caller built it in — so two tokens for the same login
+        // are byte-identical in this field, and a diff of two payloads means something.
+        check("declaration order, not the caller's",
+              "pwd,totp".equals(SessionMethod.joinCodes(
+                  SessionMethod.of(SessionMethod.TOTP, SessionMethod.PASSWORD))));
+        check("nothing to say is written as nothing at all, not as an empty claim",
+              SessionMethod.joinCodes(SessionMethod.NONE) == null);
+        // A method a NEWER instance signed and this build has never heard of. Skipped, which errs the
+        // safe way: the set comes back smaller, so a reader looking for a strong factor finds less than
+        // is really there and falls back. Treating it as a factor would let a rename grant what it never
+        // meant to.
+        check("a method this build does not know is skipped, not guessed at",
+              SessionMethod.parseCodes("pwd,quantum-retina").equals(SessionMethod.of(SessionMethod.PASSWORD)));
+        check("and a claim of nothing but unknowns reads as saying nothing",
+              SessionMethod.parseCodes("quantum-retina").isEmpty());
+        // The asymmetry with $aud, and it is deliberate: the audience has the tier to fall back on, the
+        // methods have nothing. Inferring "password" because that used to be the common case would
+        // manufacture the very fact a policy is asking about.
+        IdentityToken noMethods = PrincipalToken.verify(
+            PrincipalToken.mint(user, null, 0, SessionTier.FRONT_OFFICE, SessionAudience.FRONT_OFFICE,
+                                SessionMethod.NONE, NOW + 60_000, NOW), NOW);
+        check("a token naming no methods says so, rather than being given a likely one",
+              noMethods.methods().isEmpty());
 
         // What a token minted by the other half of a blue/green pair looks like: tiers but no $aud yet.
         // Here the fallback IS the right answer, and this pins which way it falls.
@@ -101,6 +132,8 @@ public class PrincipalRoundTripCheck {
         // either. Front office is the answer that grants least, which is what an unknown must get.
         check("is read as a front-office session, the audience that grants least",
               legacyIdentity.audience() == SessionAudience.FRONT_OFFICE);
+        check("and names no methods, which is not a claim that none were used",
+              legacyIdentity.methods().isEmpty());
 
         // The OTHER direction of the blue/green contract, and the one no other case covers: an instance
         // that predates a claim reading a token that carries it. It cannot be tested by running the old

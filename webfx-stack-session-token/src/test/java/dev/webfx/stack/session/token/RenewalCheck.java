@@ -142,6 +142,23 @@ public class RenewalCheck {
         check("and its renewal is still a back-office session, whatever the connection now says",
               boRenewed.audience() == SessionAudience.BACK_OFFICE);
 
+        System.out.println("the methods are settled at login too, and a renewal cannot add one:");
+        // The consequence worth stating out loud: a session cannot GAIN a factor by staying open.
+        // Enrolling TOTP at 11am leaves a session minted at 9am saying what it said, so a step-up meant
+        // to take effect at once needs a fresh mint rather than a renewal. Honest, and a trap for any
+        // policy that assumes otherwise.
+        FakeStore stepUp = new FakeStore();
+        SessionFamilyStoreRegistry.register(stepUp);
+        IdentityToken twoFactor = PrincipalToken.verify(SessionTokenService.mintForLogin(
+            user, true, SessionAudience.BACK_OFFICE,
+            SessionMethod.of(SessionMethod.PASSWORD, SessionMethod.TOTP)).result(), NOW);
+        check("both methods are minted into the session",
+              twoFactor.methods().equals(SessionMethod.of(SessionMethod.PASSWORD, SessionMethod.TOTP)));
+        long stepUpLater = System.currentTimeMillis() + SessionLifetime.accessWindowMillis() + 1;
+        IdentityToken stillBoth = PrincipalToken.verify(renew(twoFactor, stepUpLater).token(), stepUpLater);
+        check("and a renewal carries both forward, neither dropped nor added to",
+              stillBoth.methods().equals(SessionMethod.of(SessionMethod.PASSWORD, SessionMethod.TOTP)));
+
         SessionFamilyStoreRegistry.register(store);
         System.out.println("the access window is short, and the SESSION is not:");
         long minted = System.currentTimeMillis();
@@ -246,6 +263,8 @@ public class RenewalCheck {
         check("a back-office HINT still moves the tier, which is safe", hinted.tier() == SessionTier.BACK_OFFICE);
         check("but NEVER the audience — that would be an escalation by claim",
               hinted.audience() == SessionAudience.FRONT_OFFICE);
+        check("and no methods are invented for it either",
+              hinted.methods().isEmpty());
         SessionFamilyStoreRegistry.register(upgrade);
 
         System.out.println("logging out ends the family, not just the caller's copy of the token:");

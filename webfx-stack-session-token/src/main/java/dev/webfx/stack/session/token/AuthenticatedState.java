@@ -4,6 +4,8 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.platform.console.Console;
 import dev.webfx.stack.session.state.StateAccessor;
 
+import java.util.Set;
+
 /**
  * Builds the state that tells a client who it now is, with the proof attached.
  *
@@ -43,7 +45,8 @@ public final class AuthenticatedState {
      *                          would quietly get the front office's year-long lifetime.
      */
     public static Future<Object> createFor(Object principal, boolean backofficeSession) {
-        return createFor(principal, backofficeSession, SessionAudience.ofBackofficeFlag(backofficeSession));
+        return createFor(principal, backofficeSession, SessionAudience.ofBackofficeFlag(backofficeSession),
+                         SessionMethod.NONE);
     }
 
     /**
@@ -61,12 +64,27 @@ public final class AuthenticatedState {
      */
     public static Future<Object> createFor(Object principal, boolean backofficeSession,
                                            SessionAudience audience) {
+        return createFor(principal, backofficeSession, audience, SessionMethod.NONE);
+    }
+
+    /**
+     * The full form: who, for which app, and by what methods.
+     *
+     * <p>This is the one every gateway should be calling. The shorter forms name no methods, which a
+     * reader has to treat as "this token does not say" — correct for a token minted before the claim
+     * existed, and a silent loss of information for one minted today. See {@link SessionMethod} on why
+     * an empty set is not the same as a session that passed no checks.
+     *
+     * @param methods what was actually presented, in this login, by this caller
+     */
+    public static Future<Object> createFor(Object principal, boolean backofficeSession,
+                                           SessionAudience audience, Set<SessionMethod> methods) {
         Object state = StateAccessor.createUserIdState(principal);
         if (!SignedToken.isConfigured()) {
             reportMissingKeyOnce();
             return Future.succeededFuture(state);
         }
-        return SessionTokenService.mintForLogin(principal, backofficeSession, audience)
+        return SessionTokenService.mintForLogin(principal, backofficeSession, audience, methods)
             .map(token -> token == null ? state : StateAccessor.setUserToken(state, token))
             // A login must not fail because the machinery behind the token did. Nothing verifies tokens
             // strictly yet, so a missing one costs nothing today; that reverses at the flip, and the log

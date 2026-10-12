@@ -7,6 +7,8 @@ import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.platform.ast.json.Json;
 import dev.webfx.stack.com.serial.SerialCodecManager;
 
+import java.util.Set;
+
 /**
  * Turns an authenticated principal into a token the client can hold, and back again.
  *
@@ -72,6 +74,8 @@ public final class PrincipalToken {
     private static final String TIER_KEY = "$tier";
     /** Which app this session was established FOR — see {@link SessionAudience}. */
     private static final String AUDIENCE_KEY = "$aud";
+    /** How it was authenticated, as comma-separated codes — see {@link SessionMethod}. */
+    private static final String METHODS_KEY = "$amr";
 
     private PrincipalToken() {}
 
@@ -89,7 +93,8 @@ public final class PrincipalToken {
      * @param nowMillis           the minting time, passed in so lifetimes are testable without waiting
      */
     public static String mint(Object principal, String familyId, int generation, SessionTier tier,
-                              SessionAudience audience, long absoluteExpiryMillis, long nowMillis) {
+                              SessionAudience audience, Set<SessionMethod> methods,
+                              long absoluteExpiryMillis, long nowMillis) {
         if (principal == null)
             return null;
         Object encoded = SerialCodecManager.encodeToJson(principal);
@@ -109,6 +114,11 @@ public final class PrincipalToken {
         // credential check that just happened, and this is the moment it stops being changeable.
         if (audience != null)
             payload.set(AUDIENCE_KEY, audience.code());
+        // Omitted entirely when there is nothing to say, rather than written empty: an absent claim and
+        // an empty one must read the same, and the absent form is what every older token already has.
+        String methodCodes = SessionMethod.joinCodes(methods);
+        if (methodCodes != null)
+            payload.set(METHODS_KEY, methodCodes);
         return SignedToken.mint(Json.formatObject(payload), SessionLifetime.signedExpiryFrom(nowMillis, tier, absoluteExpiryMillis));
     }
 
@@ -154,6 +164,10 @@ public final class PrincipalToken {
         SessionAudience audience = SessionAudience.fromCode(payload.getString(AUDIENCE_KEY));
         if (audience == null)
             audience = SessionAudience.ofLegacyTier(tier);
+        // No fallback, unlike the audience: there is nothing in an older token to infer the methods from,
+        // and guessing "password" because that used to be the common case would manufacture the very fact
+        // a reader is asking about. Empty means the token does not say — see SessionMethod.
+        Set<SessionMethod> methods = SessionMethod.parseCodes(payload.getString(METHODS_KEY));
         return new IdentityToken(
             principal,
             payload.getString(FAMILY_ID_KEY),
@@ -162,7 +176,8 @@ public final class PrincipalToken {
             verified.expiryMillis(),
             absoluteExpiry,
             tier,
-            audience);
+            audience,
+            methods);
     }
 
     /**
