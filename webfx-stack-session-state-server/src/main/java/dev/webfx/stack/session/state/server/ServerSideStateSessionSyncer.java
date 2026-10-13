@@ -17,6 +17,7 @@ import dev.webfx.stack.session.token.IdentityTokenPolicy;
 import dev.webfx.stack.session.token.PrincipalToken;
 import dev.webfx.stack.session.token.RevokedFamilies;
 import dev.webfx.stack.session.token.SecurityAlarm;
+import dev.webfx.stack.session.token.SessionAudience;
 import dev.webfx.stack.session.token.SessionLifetime;
 import dev.webfx.stack.session.token.SessionTier;
 import dev.webfx.stack.session.token.SessionTokenService;
@@ -305,6 +306,11 @@ public final class ServerSideStateSessionSyncer {
         // this server verified. That is what StateAccessor.getSessionFamilyId already claims, and this is
         // what makes the claim true.
         StateAccessor.setSessionFamilyId(clientState, null);
+        // The audience is cleared here for the same reason and must stay beside it: guards grant
+        // back-office access on the strength of it, so a caller who could leave `verifiedBackoffice`
+        // set in their own message header would be granting it to themselves. Absent on every path
+        // out of here, and re-set below only from a token this server verified.
+        StateAccessor.setVerifiedBackoffice(clientState, null);
         String token = StateAccessor.getUserToken(clientState);
         if (token == null || token.isEmpty()) {
             pendingRenewedTokens.remove(serverSessionId); // nothing to hand a client that is no longer holding one
@@ -366,6 +372,11 @@ public final class ServerSideStateSessionSyncer {
         // end the family and not merely the caller's copy of its token. Set from the verified token only, so
         // no caller can name a family it does not hold.
         StateAccessor.setSessionFamilyId(clientState, identity.familyId());
+        // Which app this session was established for, as the signature says rather than as this message
+        // claims. Never null on a token this build minted; for one minted before the claim existed it is
+        // read from the tier, and for one with no tier either it is the front office — the answer that
+        // grants least. See SessionAudience.
+        StateAccessor.setVerifiedBackoffice(clientState, identity.audience() == SessionAudience.BACK_OFFICE);
         // This session's successor token has already been minted and the client is still presenting the
         // one it replaces — so it simply has not received it yet, and it will ride this message's reply.
         // Asking the store again here would be asking it about a generation THIS SERVER retired, which it

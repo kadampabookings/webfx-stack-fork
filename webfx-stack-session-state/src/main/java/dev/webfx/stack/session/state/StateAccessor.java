@@ -37,6 +37,7 @@ public final class StateAccessor {
     // copied from this one; and it would not matter much if it were, since the client already carries the
     // same value inside its own token. Not a capability: reaching the store with it still needs a valid MAC.
     private final static String SESSION_FAMILY_ID_ATTRIBUTE_NAME = "sessionFamilyId";
+    private final static String VERIFIED_BACKOFFICE_ATTRIBUTE_NAME = "verifiedBackoffice";
 
     /** Unique ID generated once at server startup — changes on every restart. */
     private static final String SERVER_RUN_ID = "srv-" + System.currentTimeMillis();
@@ -160,6 +161,35 @@ public final class StateAccessor {
      */
     public static String getSessionFamilyId(Object state) {
         return (String) getStateAttribute(state, SESSION_FAMILY_ID_ATTRIBUTE_NAME);
+    }
+
+    /**
+     * Whether this session was established FOR the back office, as the token this server verified says —
+     * TRUE back office, FALSE front office, and <b>null when no token verified</b>.
+     *
+     * <p>Not to be confused with {@link #getBackoffice}, which sits two fields above it and answers a
+     * different question with different authority. That one is the client's own assertion, re-sent on
+     * every message and changeable between any two of them; this one was decided when a credential was
+     * checked and signed into the token, so a caller cannot move it by asking. A guard that wants "has
+     * this caller accepted the back office's entry conditions" must read THIS one — the other can be
+     * changed to `fo` for the login and back to `bo` afterwards, which is the hole the audience closes.
+     *
+     * <p>Null is not "front office". It means nothing was verified on this message, so there is no
+     * answer: a caller with no token, or one whose token did not hold. Callers that grant on the strength
+     * of it must treat null as a refusal, which is why this returns a Boolean and not a boolean.
+     */
+    public static Boolean getVerifiedBackoffice(Object state) {
+        return (Boolean) getStateAttribute(state, VERIFIED_BACKOFFICE_ATTRIBUTE_NAME);
+    }
+
+    /**
+     * Records what a VERIFIED token said. Server-side only, and the server must clear it before reading
+     * anything from an incoming message — see the field's treatment in ServerSideStateSessionSyncer,
+     * which does the same for the session family and for the same reason: this arrives inside a message
+     * the caller wrote, so anything left in it is the caller's choice until a signature has held.
+     */
+    public static Object setVerifiedBackoffice(Object state, Boolean verifiedBackoffice) {
+        return setStateAttribute(state, VERIFIED_BACKOFFICE_ATTRIBUTE_NAME, verifiedBackoffice, true);
     }
 
     public static Object setSessionFamilyId(Object state, String sessionFamilyId) {
