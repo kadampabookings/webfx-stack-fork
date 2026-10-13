@@ -4,6 +4,7 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.platform.async.Promise;
 import dev.webfx.stack.authn.UserClaims;
 import dev.webfx.stack.authn.server.gateway.spi.ServerAuthenticationGateway;
+import dev.webfx.stack.session.state.LogoutUserId;
 import dev.webfx.stack.session.state.StateAccessor;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import dev.webfx.stack.session.token.SessionFamilyStore;
@@ -97,6 +98,11 @@ public class LogoutCheck {
         }
     }
 
+    /** The state a caller has once the token layer has refused their claim — the sentinel, not a principal. */
+    static Object refusedCallerState() {
+        return StateAccessor.setRunId(StateAccessor.createUserIdState(LogoutUserId.LOGOUT_USER_ID), RUN_ID);
+    }
+
     static Object callerState(String familyId) {
         Object state = StateAccessor.setRunId(StateAccessor.createUserIdState(USER), RUN_ID);
         return familyId == null ? state : StateAccessor.setSessionFamilyId(state, familyId);
@@ -147,6 +153,32 @@ public class LogoutCheck {
         logout = logOutAs(callerState(null), gateway);
         check("the device is logged out at once, as the caller", gateway.loggedOutAsTheCaller());
         check("and the logout succeeds", logout.succeeded());
+
+        System.out.println("a caller nobody recognises is already logged out, and is told so:");
+        // How a staff member actually gets here: a back-office session is capped at a day, so a tab left
+        // open overnight presents a token the server refuses, and what reaches the gateway is the logout
+        // sentinel. No gateway accepts it. This used to answer with a FAILURE, and the client then kept
+        // its stored session — the legacy back office stayed signed in across reloads with every call
+        // failing, recoverable only by clearing the browser's site data.
+        SessionFamilyStoreRegistry.register(new SlowStore());
+        gateway = new RecordingGateway();
+        logout = logOutAs(refusedCallerState(), gateway);
+        check("the logout SUCCEEDS rather than failing on the way out", logout.succeeded());
+        check("no gateway was asked to log anybody out, because none recognised the caller", !gateway.loggedOut);
+        check("and the gateway was consulted about the sentinel, not about a principal",
+              LogoutUserId.isLogoutUserId(gateway.userIdSeenByAccepts));
+
+        // Logging out twice must not be an error either — the second one lands in exactly this case.
+        logout = logOutAs(refusedCallerState(), new RecordingGateway());
+        check("so logging out again is not an error", logout.succeeded());
+
+        System.out.println("...but a server with NO gateway at all is a misconfiguration, not a logged-out caller:");
+        // Kept apart deliberately: collapsing the two would let every logout on a server that is missing
+        // its authentication providers report success while doing nothing.
+        SessionFamilyStoreRegistry.register(new SlowStore());
+        Future<Void> noGateways = ThreadLocalStateHolder.runWithState(callerState(null),
+            () -> ServerAuthenticationPortalProvider.logoutWith(List.of()));
+        check("that still fails, loudly", noGateways.failed());
 
         System.out.println("\n" + pass + " passed, " + fail + " failed");
         if (fail > 0) System.exit(1);

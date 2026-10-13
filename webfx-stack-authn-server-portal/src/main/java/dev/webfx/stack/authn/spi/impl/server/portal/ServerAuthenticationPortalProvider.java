@@ -173,14 +173,40 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
         return SessionTokenService.revokeOtherSessionsOfCurrentUser().map(List::size);
     }
 
-    /** Must run with the caller's state on the thread — see logoutWith(). */
+    /**
+     * Must run with the caller's state on the thread — see logoutWith().
+     *
+     * <p><b>A caller nobody recognises is already logged out, and is told so.</b> That is the common way
+     * to arrive here, not an exotic one: the token layer refuses an identity claim whose token is missing
+     * or expired, and what reaches this method is the logout sentinel, which no gateway accepts. A
+     * back-office session is capped at a day, so every staff member who leaves a tab open overnight and
+     * then clicks Logout is this caller.
+     *
+     * <p>This used to answer with a failure, and that failure was the bug. Logging out is the one
+     * operation that must work when an identity is no longer accepted — it is what somebody does ABOUT
+     * that. The part of logout that ends anything has already run above, unconditionally and for exactly
+     * this caller's sake; what a gateway's logout adds is telling that device, and there is no recognised
+     * session left to tell it about. Succeeding also makes logout idempotent, which it should be: doing it
+     * twice is not an error.
+     *
+     * <p>What the failure cost, found on staging on 2026-10-13: the client is told its logout failed and
+     * keeps its stored session. The React client clears local state in a {@code finally} and escapes it;
+     * the Java client's logout is a bare bus call that clears nothing and waits for a server push that
+     * never comes — so the legacy back office stayed signed in across reloads, with every other call
+     * failing too, and the only way out was clearing the browser's site data by hand.
+     */
     private static Future<Void> logoutThroughGateway(List<ServerAuthenticationGateway> gateways) {
         for (ServerAuthenticationGateway gateway : gateways) {
             boolean accepts = gateway.acceptsUserId();
             if (accepts)
                 return gateway.logout();
         }
-        return Future.failedFuture("logout() failed on server authentication portal because no server gateway accepted UserId " + ThreadLocalStateHolder.getUserId());
+        // Still a failure when there is no gateway AT ALL: that is a server missing its authentication
+        // providers, not a caller who is already logged out, and treating the two alike would let every
+        // logout on a misconfigured server report success while doing nothing.
+        if (gateways.isEmpty())
+            return Future.failedFuture("logout() failed on server authentication portal because no server authentication gateway is registered at all");
+        return Future.succeededFuture();
     }
 
 
