@@ -160,6 +160,15 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
     }
 
     @Override
+    public Boolean getClientBackoffice(Object clientRunId) {
+        // get, never getOrCreate: this asks a question about a client and must not bring one into
+        // existence by asking. An absent entry and an entry that has not reported its app both answer
+        // null, which is the same answer — we do not know.
+        PushClientInfo pushClientInfo = clientRunId == null ? null : pushClientInfos.get(clientRunId);
+        return pushClientInfo == null ? null : pushClientInfo.backoffice;
+    }
+
+    @Override
     public List<PushClientMetadata> snapshotConnectedClients() {
         List<PushClientMetadata> snapshot = new ArrayList<>(pushClientInfos.size());
         for (PushClientInfo info : pushClientInfos.values())
@@ -208,7 +217,10 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         return probeIndex < UNREACHABLE_PROBE_DELAYS_MS.length ? UNREACHABLE_PROBE_DELAYS_MS[probeIndex] : -1;
     }
 
-    private PushClientInfo getOrCreatePushClientInfo(Object clientRunId) {
+    // Package-private, not private, so ClientBackofficeLookupCheck can register a client without a bus:
+    // every other way in (push, clientIsLive, setClientMetadata) either needs one or deliberately refuses
+    // to create an entry. Same reason isFamilyClaimAllowed is reachable from FamilyClaimCheck.
+    PushClientInfo getOrCreatePushClientInfo(Object clientRunId) {
         return pushClientInfos.computeIfAbsent(clientRunId, PushClientInfo::new);
     }
 

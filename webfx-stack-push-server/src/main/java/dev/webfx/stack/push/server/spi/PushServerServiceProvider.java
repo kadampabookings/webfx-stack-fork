@@ -41,6 +41,28 @@ public interface PushServerServiceProvider {
     }
 
     /**
+     * Which app a connected client reported itself to be — TRUE back office, FALSE front office, null
+     * where this client has not said or is not registered here.
+     *
+     * <p>For the one case that needs to mint a session FOR A CLIENT OTHER THAN THE CALLER: the magic-link
+     * requester push, which signs in the tab that asked for a link while running inside the request of
+     * the tab that clicked it. Everywhere else the flag is captured from the caller's own connection at
+     * method entry, and this must not be used to second-guess that — it answers about a third party.
+     *
+     * <p>Null is "do not know", and a caller must not read it as the front office. Deciding an audience
+     * from a guess is how a session ends up stamped for an app it is not, which outlives the guess: the
+     * claim is signed and cannot be corrected afterwards.
+     *
+     * <p>It is as trustworthy as the flag anywhere else — the client asserted it — and no less: the same
+     * assertion, by the same client, recorded when it last spoke rather than read from the current
+     * thread. The thread is the wrong place to read it here, because the thread belongs to the OTHER
+     * client.
+     */
+    default Boolean getClientBackoffice(Object clientRunId) {
+        return null;
+    }
+
+    /**
      * Records which session family a connected client's verified token belongs to, so a revocation of that
      * family can reach the client at once instead of waiting for its next message.
      *

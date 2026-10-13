@@ -59,6 +59,11 @@ public final class PushServerService {
         return getProvider().snapshotClientRunIdsOfFamilies(sessionFamilyIds);
     }
 
+    /** See {@link PushServerServiceProvider#getClientBackoffice} — null means "do not know", never "front office". */
+    public static Boolean getClientBackoffice(Object clientRunId) {
+        return getProvider().getClientBackoffice(clientRunId);
+    }
+
     public static List<PushClientMetadata> snapshotConnectedClients() {
         return getProvider().snapshotConnectedClients();
     }
