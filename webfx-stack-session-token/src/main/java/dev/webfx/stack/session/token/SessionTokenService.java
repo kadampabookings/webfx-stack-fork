@@ -103,7 +103,7 @@ public final class SessionTokenService {
         SessionFamilyStore store = SessionFamilyStoreRegistry.getStore();
         if (store == null)
             return Future.succeededFuture(mintQuietly(principal, null, 0, tier, audience, methods, absoluteExpiry, now));
-        return store.open(principal, tier, absoluteExpiry)
+        return store.open(principal, tier, audience, methods, absoluteExpiry)
             .map(familyId -> mintQuietly(principal, familyId, 0, tier, audience, methods, absoluteExpiry, now, store))
             .otherwise(e -> {
                 Console.log("⚠️ Could not open a session family — this session cannot be rotated and a stolen"
@@ -159,7 +159,7 @@ public final class SessionTokenService {
             if (store == null)
                 return Future.succeededFuture(TokenRenewal.renewed(
                     mintQuietly(presented.principal(), null, 0, tier, audience, methods, absoluteExpiry, nowMillis)));
-            return store.open(presented.principal(), tier, absoluteExpiry)
+            return store.open(presented.principal(), tier, audience, methods, absoluteExpiry)
                 .map(familyId -> TokenRenewal.renewed(
                     mintQuietly(presented.principal(), familyId, 0, tier, audience, methods, absoluteExpiry, nowMillis)))
                 // Same reasoning as at login: a family that cannot be opened costs rotation, not the

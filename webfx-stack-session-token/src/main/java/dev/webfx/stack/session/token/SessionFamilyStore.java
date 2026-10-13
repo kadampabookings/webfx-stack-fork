@@ -3,6 +3,7 @@ package dev.webfx.stack.session.token;
 import dev.webfx.platform.async.Future;
 
 import java.util.List;
+import java.util.Set;
 
 /**
  * Where a session family's generation counter lives, so that a retired token can be recognised.
@@ -49,6 +50,24 @@ public interface SessionFamilyStore {
      * @return the new family's id, to be signed into the token
      */
     Future<String> open(Object principal, SessionTier tier, long absoluteExpiryMillis);
+
+    /**
+     * The same, also recording what the token's {@code $aud} and {@code $amr} will say.
+     *
+     * <p>A store that keeps these can answer what a log line cannot: not only which sessions ended
+     * badly, but what share of the sessions opened the same way did — a rate is not a finding without
+     * its denominator. Both are frozen at login and carried unchanged through every renewal, so they
+     * are written once, here, and a row that later disagreed with its token would be a bug rather than
+     * drift.
+     *
+     * <p>Defaults to discarding them, so a store that has nowhere to put them — every in-memory one in
+     * the checks — needs no change. Null audience and empty methods are "not recorded", which is what a
+     * legacy token being upgraded genuinely has.
+     */
+    default Future<String> open(Object principal, SessionTier tier, SessionAudience audience,
+                                Set<SessionMethod> methods, long absoluteExpiryMillis) {
+        return open(principal, tier, absoluteExpiryMillis);
+    }
 
     /**
      * Advances a family by one generation, or explains why it will not.
