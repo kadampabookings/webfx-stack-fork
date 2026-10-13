@@ -6,6 +6,7 @@ import dev.webfx.platform.console.Console;
 import dev.webfx.platform.service.MultipleServiceProviders;
 import dev.webfx.stack.authn.UserClaims;
 import dev.webfx.stack.authn.server.gateway.spi.ServerAuthenticationGateway;
+import dev.webfx.stack.authn.server.gateway.spi.impl.ServerAuthenticationGatewayBase;
 import dev.webfx.stack.authn.spi.AuthenticationServiceProvider;
 import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import dev.webfx.stack.session.token.SessionTokenService;
@@ -185,9 +186,16 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
      * <p>This used to answer with a failure, and that failure was the bug. Logging out is the one
      * operation that must work when an identity is no longer accepted — it is what somebody does ABOUT
      * that. The part of logout that ends anything has already run above, unconditionally and for exactly
-     * this caller's sake; what a gateway's logout adds is telling that device, and there is no recognised
-     * session left to tell it about. Succeeding also makes logout idempotent, which it should be: doing it
-     * twice is not an error.
+     * this caller's sake. Succeeding also makes logout idempotent, which it should be: doing it twice is
+     * not an error.
+     *
+     * <p><b>And the caller is told, which succeeding alone did not do.</b> Telling the client is the whole
+     * of what a gateway's logout does, so with no gateway to do it, nobody did: the first version of this
+     * fix stopped the call failing and left the back office still showing the user signed in, because the
+     * Java client clears nothing of its own and waits to be told. The server does send that message when
+     * it first refuses a claim — but once, addressed by runId, with no retry, and the session holds the
+     * sentinel from then on so the quiet path takes over and it is never sent again. A logout is the
+     * moment the client is certainly listening, so it is the moment worth sending it again.
      *
      * <p>What the failure cost, found on staging on 2026-10-13: the client is told its logout failed and
      * keeps its stored session. The React client clears local state in a {@code finally} and escapes it;
@@ -206,7 +214,19 @@ public class ServerAuthenticationPortalProvider implements AuthenticationService
         // logout on a misconfigured server report success while doing nothing.
         if (gateways.isEmpty())
             return Future.failedFuture("logout() failed on server authentication portal because no server authentication gateway is registered at all");
-        return Future.succeededFuture();
+        // The push is a courtesy and must never decide the outcome: a client that has gone, or a push
+        // service that is not registered at all, would otherwise fail the logout again — which is the bug
+        // this method exists to fix, reintroduced one line further down.
+        try {
+            return ServerAuthenticationGatewayBase.pushLogoutMessageToUnrecognisedCaller()
+                .otherwise(e -> {
+                    Console.log("⚠️ Logged out a caller no gateway recognises, but could not tell them: " + e);
+                    return null;
+                });
+        } catch (Exception e) {
+            Console.log("⚠️ Logged out a caller no gateway recognises, but could not tell them: " + e);
+            return Future.succeededFuture();
+        }
     }
 
 

@@ -10,6 +10,11 @@ import dev.webfx.stack.session.state.ThreadLocalStateHolder;
 import dev.webfx.stack.session.token.SessionFamilyStore;
 import dev.webfx.stack.session.token.SessionFamilyStoreRegistry;
 import dev.webfx.stack.session.token.SessionTier;
+import dev.webfx.platform.service.SingleServiceProvider;
+import dev.webfx.stack.com.bus.Bus;
+import dev.webfx.stack.com.bus.DeliveryOptions;
+import dev.webfx.stack.push.server.UnresponsivePushClientListener;
+import dev.webfx.stack.push.server.spi.PushServerServiceProvider;
 
 import java.util.List;
 
@@ -73,6 +78,26 @@ public class LogoutCheck {
         @Override public Future<UserClaims> getUserClaims() { return Future.failedFuture("unused"); }
         @Override public boolean acceptsUpdateCredentialsArgument(Object argument) { return false; }
         @Override public Future<?> updateCredentials(Object argument) { return Future.failedFuture("unused"); }
+    }
+
+    /** Records what the server tried to tell a client, so "we told them" can be asserted rather than hoped. */
+    static class RecordingPushService implements PushServerServiceProvider {
+        Object pushedToRunId;
+        Object pushedUserId;
+
+        @Override public <T> Future<T> push(String clientServiceAddress, Object javaArgument, DeliveryOptions options, Bus bus, Object clientRunId) {
+            pushedToRunId = clientRunId;
+            pushedUserId = StateAccessor.getUserId(options.getState());
+            return Future.succeededFuture();
+        }
+
+        @Override public void clientIsLive(Object clientRunId) {}
+        @Override public void addUnresponsivePushClientListener(UnresponsivePushClientListener listener) {}
+        @Override public void removeUnresponsivePushClientListener(UnresponsivePushClientListener listener) {}
+
+        boolean toldTheCaller() {
+            return RUN_ID.equals(pushedToRunId) && LogoutUserId.isLogoutUserId(pushedUserId);
+        }
     }
 
     /** Ends a family when told to, not when asked — the gap a database round trip leaves. */
@@ -165,6 +190,20 @@ public class LogoutCheck {
         logout = logOutAs(refusedCallerState(), gateway);
         check("the logout SUCCEEDS rather than failing on the way out", logout.succeeded());
         check("no gateway was asked to log anybody out, because none recognised the caller", !gateway.loggedOut);
+        // It succeeds HERE with no push service registered at all, which is the point of that arm: telling
+        // the client is attempted and its failure is swallowed. Succeeding only when the push works would
+        // be the original bug with an extra step — a client that has gone would fail the logout again.
+        check("and it survives having nobody to tell, rather than failing again", logout.succeeded());
+
+        // ...and when there IS somebody to tell, they are told. This is what the first version of the fix
+        // missed: the call stopped failing and the back office stayed signed in, because telling the client
+        // is the whole of what a gateway's logout does and no gateway ran.
+        RecordingPushService pushService = new RecordingPushService();
+        SingleServiceProvider.registerServiceProvider(PushServerServiceProvider.class, pushService);
+        SessionFamilyStoreRegistry.register(new SlowStore());
+        logout = logOutAs(refusedCallerState(), new RecordingGateway());
+        check("the caller is told it is logged out, on its own connection", pushService.toldTheCaller());
+        check("and the logout still succeeds", logout.succeeded());
         check("and the gateway was consulted about the sentinel, not about a principal",
               LogoutUserId.isLogoutUserId(gateway.userIdSeenByAccepts));
 
