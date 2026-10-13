@@ -500,11 +500,17 @@ public final class ServerSideStateSessionSyncer {
      * leaving it whole is confined to that machine too: there, a client that ignores its own successor is
      * excused for longer than the scaled access window.
      */
-    // Package-private so GraceAlignmentCheck can assert it against SessionLifetime.REUSE_GRACE_MILLIS.
-    // The two excuse the same thing — a holder on the token a renewal has just replaced — and they MUST
-    // stay equal: this one applies when the server remembers minting the successor, the other when it
-    // does not, and a holder should not be killed over which of those is true. They disagreed until
-    // 2026-10-11 and it ended 42 families in a day. See the comment on REUSE_GRACE_MILLIS.
+    // This used to have a twin in the store — SessionLifetime.REUSE_GRACE_MILLIS — and a check asserting
+    // the two stayed equal, because both excused a holder on the token a renewal had just replaced and a
+    // holder should not be killed over which of them applied. They disagreed until 2026-10-11, 30 minutes
+    // here against 60 seconds there, and it ended 42 families in a day.
+    //
+    // The twin and its check are gone (see SessionLifetime, where the constant was): the store decides on
+    // how far behind a holder is, not on a clock, because two holders renewing independently are always
+    // about one access window apart and the access window IS the renewal cadence — so no duration could
+    // separate a sleeping tab from a thief. This one stays because it answers a different question: not
+    // "is a stale token forgivable" but "did THIS server mint a successor that has not reached its client
+    // yet", which is a fact it knows and a bound it therefore needs.
     static final long PENDING_DELIVERY_GRACE_MILLIS = SessionLifetime.ACCESS_WINDOW_BASE_MILLIS;
 
     private static final int PENDING_TOKEN_CAP = 20_000;
