@@ -64,6 +64,27 @@ public class StreamOwnershipCheck {
         check("another client's close leaves the stream open",
             STATEMENT.equals(as("owner", () -> provider.getStreamStatement(id))));
 
+        // The parent stream. A client names its parent from its OWN active calls
+        // (ReactiveQueryPushCall.getActiveParent), so a foreign parent is never legitimate — and adopting
+        // one is not harmless: updateActiveStreamCount cascades from a parent to its children, and a
+        // QueryInfo is shared by every client on the same argument, so a child hung off a stranger's stream
+        // perturbs the active count of a query other clients depend on for their refreshes.
+        Future<Object> intruderChild = as("intruder", () -> provider.executeQueryPush(
+            QueryPushArgument.builder().setQueryArgument(qa).setActive(false).setParentQueryStreamId(id).build()));
+        check("another client may still open its own stream", intruderChild.succeeded());
+        check("but it is not adopted as a child of the owner's",
+            provider.getStreamInfo(id).childrenStreamInfos.isEmpty());
+        as("intruder", () -> provider.executeQueryPush(
+            QueryPushArgument.builder().setQueryStreamId(intruderChild.result()).setClose(true).build()));
+
+        // The owner's own child IS adopted — the check must not cost the feature it is protecting.
+        Future<Object> ownChild = as("owner", () -> provider.executeQueryPush(
+            QueryPushArgument.builder().setQueryArgument(qa).setActive(false).setParentQueryStreamId(id).build()));
+        check("the owner's own child is adopted",
+            ownChild.succeeded() && provider.getStreamInfo(id).childrenStreamInfos.size() == 1);
+        as("owner", () -> provider.executeQueryPush(
+            QueryPushArgument.builder().setQueryStreamId(ownChild.result()).setClose(true).build()));
+
         Future<Object> update = as("owner", () -> provider.executeQueryPush(
             QueryPushArgument.builder().setQueryStreamId(id).setQueryArgument(other).build()));
         check("the owner can still change it", update.succeeded());

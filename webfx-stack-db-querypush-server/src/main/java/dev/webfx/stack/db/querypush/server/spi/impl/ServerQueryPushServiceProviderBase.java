@@ -1169,7 +1169,16 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
             userId = ThreadLocalStateHolder.getUserId();
             backoffice = clientRunId == null ? null : ThreadLocalStateHolder.isBackoffice();
             Object parentQueryStreamId = arg.getParentQueryStreamId();
-            parentStreamInfo = getStreamInfo(parentQueryStreamId);
+            StreamInfo parent = getStreamInfo(parentQueryStreamId);
+            // The LAST lookup that found a stream by id alone. A parent is always one of the same client's
+            // own streams — ReactiveQueryPushCall takes it from getActiveParent() — so a foreign one is not
+            // a case to support, and adopting one is not harmless: updateActiveStreamCount cascades from a
+            // parent to its children, and a QueryInfo is SHARED by every client subscribing to the same
+            // argument, so a child attached to a stranger's stream drives the active count of a query other
+            // clients depend on, which is what decides when it is refreshed.
+            // Treated as no parent rather than refused, which is exactly how an absent or already-closed
+            // parent already behaves, and says nothing about which ids are open.
+            parentStreamInfo = parent != null && isCallersStream(parent) ? parent : null;
             if (parentStreamInfo != null)
                 parentStreamInfo.childrenStreamInfos.add(this);
             Console.log(">>> parentStreamInfoId = " + parentQueryStreamId + ", parentStreamInfo " + (parentStreamInfo == null ? "null" : "not null"));
