@@ -696,6 +696,25 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
         return true;
     }
 
+    @Override
+    public String getStreamStatement(Object queryStreamId) {
+        StreamInfo streamInfo = getStreamInfo(queryStreamId);
+        if (streamInfo == null || !isCallersStream(streamInfo) || streamInfo.queryInfo == null)
+            return null;
+        return streamInfo.queryInfo.getQueryArgument().getStatement();
+    }
+
+    /**
+     * Whether the client on this thread is the one that opened the stream. Stream ids are a server-wide
+     * sequence, so without this any client could change or close another client's subscriptions by counting.
+     * The results would still go to the owner, so nothing is read this way, but the owner's screen would show
+     * whatever the other client asked for. The run id is the client's for the life of its page: a client that
+     * reconnects forgets its stream ids and opens new streams (ReactiveQueryPushCall, query-push-service.ts).
+     */
+    protected static boolean isCallersStream(StreamInfo streamInfo) {
+        return java.util.Objects.equals(streamInfo.clientRunId, ThreadLocalStateHolder.getRunId());
+    }
+
     /** Maps a registry result to its wire DTO (carrying the statement so the snapshot list is self-identifying). */
     private static SqlAnalyzeResultInfo toAnalyzeInfo(SqlAnalyzeRegistry.Result r, long now) {
         switch (r.status) {

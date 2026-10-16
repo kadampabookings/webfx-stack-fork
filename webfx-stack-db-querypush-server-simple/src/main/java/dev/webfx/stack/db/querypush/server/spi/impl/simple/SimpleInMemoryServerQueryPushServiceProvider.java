@@ -88,8 +88,12 @@ public final class SimpleInMemoryServerQueryPushServiceProvider extends ServerQu
 
     private StreamInfo getStreamInfo(QueryPushArgument argument) {
         Object queryStreamId = argument.getQueryStreamId();
-        if (queryStreamId != null)
-            return streamInfos.get(queryStreamId);
+        if (queryStreamId != null) {
+            StreamInfo streamInfo = streamInfos.get(queryStreamId);
+            // Another client's stream answers exactly as a missing one does, so the refusal says nothing about
+            // which ids are open.
+            return streamInfo != null && isCallersStream(streamInfo) ? streamInfo : null;
+        }
         StreamInfo streamInfo = new StreamInfo(argument);
         streamInfos.put(streamInfo.queryStreamId = queryStreamIdSeq++, streamInfo);
         return streamInfo;
