@@ -50,6 +50,7 @@ public final class ClientQueryGuard {
     /** Refusal messages returned to the client. Deliberately short and saying nothing about the schema. */
     public static final String RAW_SQL_REFUSED = "A client query must be DQL";
     public static final String UNCHECKABLE_REFUSED = "This query cannot be checked, so it was not run";
+    public static final String SERVER_PARAMETER_REFUSED = "A client query cannot supply a server-supplied parameter";
 
     private static volatile Inspector inspector;
 
@@ -75,6 +76,13 @@ public final class ClientQueryGuard {
     private static String decide(QueryArgument argument) {
         if (argument == null)
             return UNCHECKABLE_REFUSED;
+        // The caller's own values (CALLER_PERSON and its kin) are the server's to supply. The endpoint appends
+        // them after whatever names the client sent, and the binding takes the FIRST value with a given name, so a
+        // client naming one itself would have its value bound in place of the server's: reading as somebody else
+        // the day a read rule trusts the term. Refused for every statement, not only those that name a caller term,
+        // because the check that decides whether to attach is a text test the client controls.
+        if (ServerCallerParameters.suppliesServerName(argument.getParameterNames()))
+            return SERVER_PARAMETER_REFUSED;
         if (argument.getLanguage() == null) {
             // Refused here, before any inspector is consulted — so if anyone is watching client reads, this is
             // the only place they can hear about this one. It is worth hearing: a client still sending raw SQL

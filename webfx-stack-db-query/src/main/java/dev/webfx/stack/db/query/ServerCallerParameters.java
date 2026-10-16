@@ -51,6 +51,22 @@ public final class ServerCallerParameters {
     private static final String[] RESERVED_NAMES = {"caller.person", "caller.account"};
 
     /**
+     * The prefix every server-supplied name carries — the same as {@code ServerParameterFunction.PARAMETER_NAME_PREFIX},
+     * which this module cannot see. Matched as a prefix rather than against {@link #RESERVED_NAMES}, so a term
+     * registered later is covered before anyone remembers to list it.
+     */
+    private static final String RESERVED_PREFIX = "caller.";
+
+    /** Whether any of these names is one only the server may supply (a client sending one is refused). */
+    public static boolean suppliesServerName(String[] parameterNames) {
+        if (parameterNames != null)
+            for (String name : parameterNames)
+                if (name != null && name.startsWith(RESERVED_PREFIX))
+                    return true;
+        return false;
+    }
+
+    /**
      * True when the statement could possibly use one of these terms.
      *
      * <p>A TEXT test, deliberately, and it is the reason this is affordable at all. Attaching unconditionally

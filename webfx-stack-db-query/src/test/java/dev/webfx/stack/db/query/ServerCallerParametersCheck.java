@@ -49,6 +49,29 @@ public class ServerCallerParametersCheck {
         check("and do not collide in a hash map, which is how subscriptions are keyed",
               attached.hashCode() != otherCaller.hashCode());
 
+        // ── A client naming a server-supplied value itself ──
+        // attach APPENDS the server's values after the client's names, and the binding takes the FIRST value
+        // with a given name — so a forged name would be bound in place of the server's. Shown here on the
+        // attached argument, then refused at the guard, which every client query passes before attach.
+        QueryArgument forged = QueryArgument.builder().setDataSourceId("ds").setLanguage("DQL")
+                .setStatement("select id from Document d where person=CALLER_PERSON")
+                .setParameters(999).setParameterNames("caller.person").build();
+        QueryArgument forgedAttached = ServerCallerParameters.attach(forged);
+        int firstMatch = Arrays.asList(forgedAttached.getParameterNames()).indexOf("caller.person");
+        check("without the guard, the FIRST caller.person bound would be the client's forged 999 (why it is refused)",
+              Integer.valueOf(999).equals(forgedAttached.getParameters()[firstMatch]));
+        check("the guard refuses a client query naming caller.person",
+              ClientQueryGuard.SERVER_PARAMETER_REFUSED.equals(ClientQueryGuard.refusalReason(forged)));
+        check("whatever the statement says — the attach decision is a text test the client controls",
+              ClientQueryGuard.SERVER_PARAMETER_REFUSED.equals(ClientQueryGuard.refusalReason(
+                  QueryArgument.builder().copy(forged).setStatement("select id from Event e").build())));
+        check("and any caller.* name, including terms registered later",
+              ClientQueryGuard.SERVER_PARAMETER_REFUSED.equals(ClientQueryGuard.refusalReason(
+                  QueryArgument.builder().copy(forged).setParameterNames("caller.somethingNew").build())));
+        check("a client's ordinary names still pass",
+              ClientQueryGuard.refusalReason(QueryArgument.builder().copy(forged).setParameterNames("eventId").build()) == null);
+        check("as do unnamed parameters", ClientQueryGuard.refusalReason(plain) == null);
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " caller parameter checks failed");
