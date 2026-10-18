@@ -27,6 +27,22 @@ public final class ProtectedEntityWriteRegistry {
 
     private ProtectedEntityWriteRegistry() {}
 
+    /**
+     * A written value the seam could not read — an expression rather than a literal or a parameter, a
+     * parameter out of range, or a non-scalar. Compare by identity.
+     *
+     * <p>It used to be null, which made it indistinguishable from a field explicitly set to null. A rule
+     * placing a row by a written owner field then read {@code event = 1897+1} as "no event", and judged the
+     * write in the wrong place: the caller chose the reading by choosing to write an expression. So unknown
+     * is now its own value, as a same-batch reference already was, and a rule that cannot use it refuses.
+     */
+    public static final Object UNRESOLVED_VALUE = new Object() {
+        @Override
+        public String toString() {
+            return "(unresolved)";
+        }
+    };
+
     /** The three ways a DQL statement can change rows. */
     public enum WriteVerb { INSERT, UPDATE, DELETE }
 
@@ -36,7 +52,13 @@ public final class ProtectedEntityWriteRegistry {
      * @param writtenFields the fields this statement SETS, empty for a delete
      * @param writtenValues those fields' values where they resolve to a scalar — an insert names its
      *                      owner here ({@code insert Document set person=$1}), which is how a new row's
-     *                      ownership can be judged without a row existing to look up
+     *                      ownership can be judged without a row existing to look up.
+     *                      <p><b>Null means the value IS null</b> — a {@code null} literal or a null
+     *                      parameter. A value this could not read (an expression such as
+     *                      {@code event = 1897+1}, a parameter out of range, a non-scalar) is
+     *                      {@link #UNRESOLVED_VALUE}, and a {@link GeneratedKeyReference} is a row this
+     *                      batch creates. A rule must never read either as null: "this field was cleared"
+     *                      and "this field was set to something I cannot see" are opposite answers.
      * @param targetId      the id of the row being changed, when an {@code id = value} test can be read
      *                      out of the WHERE — either as the whole of it, or as one side of a conjunction
      *                      — and <b>null when it could not be determined</b>, which covers every other

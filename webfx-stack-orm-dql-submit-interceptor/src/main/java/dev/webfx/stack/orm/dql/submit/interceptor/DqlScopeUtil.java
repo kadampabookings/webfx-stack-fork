@@ -109,6 +109,21 @@ final class DqlScopeUtil {
      * The value a constant or a numbered ($N) parameter stands for, as sent — or null for anything else, including an
      * unnamed "?" (whose position only its order can tell; see DqlSubmitInterceptorInitializer).
      */
+    /**
+     * Whether {@link #resolveRawValue} can say what this value IS: a constant, or a {@code $N} within range.
+     * Its answer may then be a real null. Anything else — an expression, a named parameter, an index out of
+     * range — it answers null for without knowing, and a caller that must tell the two apart asks this first.
+     */
+    static boolean isRawValueReadable(Expression<?> right, Object[] parameters) {
+        if (right instanceof Constant)
+            return true;
+        if (right instanceof ParameterReference) {
+            int index = ((ParameterReference<?>) right).getIndex();
+            return parameters != null && index >= 1 && index <= parameters.length;
+        }
+        return false;
+    }
+
     static Object resolveRawValue(Expression<?> right, Object[] parameters) {
         if (right instanceof Constant)
             return ((Constant<?>) right).getConstantValue();

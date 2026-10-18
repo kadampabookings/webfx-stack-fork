@@ -148,13 +148,19 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         Expression<?>[] assignments = setClause.getExpressions();
         for (int i = 0; i < assignments.length; i++)
             if (assignments[i] instanceof Equals equals && equals.getLeft() instanceof DomainField field) {
-                // A value that is not a resolvable scalar maps to null: the FIELD was written (so a
-                // field rule still fires) but its value is unknown to us, which a policy reading values
-                // must treat as unknown rather than as absent.
-                Object raw = unnamed != null && unnamed.setPositions()[i] >= 0
-                    ? parameterAt(parameters, unnamed.setPositions()[i])
-                    : DqlScopeUtil.resolveRawValue(equals.getRight(), parameters);
-                values.put(field.getName(), writtenValueOf(raw));
+                // The FIELD is always recorded, so a field rule still fires. Its value is null only when it
+                // IS null; one that could not be read is UNRESOLVED_VALUE, never null (see WriteRequest).
+                boolean read;
+                Object raw;
+                if (unnamed != null && unnamed.setPositions()[i] >= 0) {
+                    int position = unnamed.setPositions()[i];
+                    read = parameters != null && position < parameters.length;
+                    raw = parameterAt(parameters, position);
+                } else {
+                    read = DqlScopeUtil.isRawValueReadable(equals.getRight(), parameters);
+                    raw = DqlScopeUtil.resolveRawValue(equals.getRight(), parameters);
+                }
+                values.put(field.getName(), read ? writtenValueOf(raw) : ProtectedEntityWriteRegistry.UNRESOLVED_VALUE);
             }
         return values;
     }
@@ -179,7 +185,11 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
      * {@code set role = <a role this batch is inserting>} as an unassignment — which it never was.
      */
     private static Object writtenValueOf(Object raw) {
-        return raw instanceof GeneratedKeyReference ? raw : scalarValueOf(raw);
+        if (raw == null || raw instanceof GeneratedKeyReference)
+            return raw;
+        Object scalar = scalarValueOf(raw);
+        // A value that was read but is not a scalar (a date, an array) is not null either: it is something.
+        return scalar != null ? scalar : ProtectedEntityWriteRegistry.UNRESOLVED_VALUE;
     }
 
     /**
