@@ -219,6 +219,38 @@ public final class ProtectedEntityWriteRegistry {
          * would describe a client's traffic as tidier than it is.
          */
         default void onUnparseableStatement(String statement) {}
+
+        /**
+         * One submit is beginning: every {@link #onWrite} until {@link #onSubmitEnd} belongs to it.
+         *
+         * <p><b>Why the boundary is worth reporting at all.</b> A submit is one transaction, and the
+         * question an inventory of writes cannot otherwise answer is what ONE of them contains — whether
+         * a single flush spans two organizations, and whether each could name one operation. Per
+         * statement, that is invisible: the shapes arrive in a stream with nothing saying where one
+         * caller's action ended and the next began.
+         *
+         * <p>Reported rather than inferred for a reason. A batch's writes are all started synchronously
+         * on the caller's own thread before any future completes, so an inspector CAN tell that
+         * consecutive calls on one thread are related — but not where the run stops, which makes the
+         * last submit of every thread unobservable and any timeout a guess. The interceptor knows
+         * exactly, and saying so costs two calls.
+         *
+         * <p>Default no-op: an inspector that only wants shapes implements neither.
+         *
+         * @param statementCount how many statements the submit carries, including ones this inspector
+         *                       will not be told about (not DQL, or naming no protected entity) — so an
+         *                       inspector can tell a submit it saw whole from one it saw part of
+         */
+        default void onSubmitBegin(int statementCount) {}
+
+        /**
+         * That submit is complete, whether or not it was authorized or executed.
+         *
+         * <p>Called from a finally, so a refusal or a throw between the two still closes the group: an
+         * inspector that accumulated until the next begin would otherwise attribute the next caller's
+         * writes to this one.
+         */
+        default void onSubmitEnd() {}
     }
 
     private static volatile WriteInspector inspector;
@@ -248,6 +280,33 @@ public final class ProtectedEntityWriteRegistry {
         if (currentInspector != null) {
             try {
                 currentInspector.onWrite(request);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    /**
+     * Opens a submit group on the inspector, if one is watching.
+     *
+     * <p>Asked whether anyone is inspecting at all before notifying: with no inspector this is two
+     * volatile reads per submit and nothing else.
+     */
+    public static void notifySubmitBegin(int statementCount) {
+        WriteInspector currentInspector = inspector;
+        if (currentInspector != null) {
+            try {
+                currentInspector.onSubmitBegin(statementCount);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    /** Closes it. Never throws into the caller, for the same reason as {@link #notifyWriteInspected}. */
+    public static void notifySubmitEnd() {
+        WriteInspector currentInspector = inspector;
+        if (currentInspector != null) {
+            try {
+                currentInspector.onSubmitEnd();
             } catch (RuntimeException ignored) {
             }
         }

@@ -70,7 +70,17 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
 
     private static Future<SubmitResult> interceptAndExecuteSubmit(SubmitArgument argument, SubmitServiceProvider targetProvider) {
         reportIfNotDql(argument);
-        return authorizeAndInspect(argument)
+        // Bracketed as well as the batch path: a one-statement submit is a caller action like any
+        // other, and leaving it ungrouped would make every single-row save look like a submit this
+        // inspector never saw the start of.
+        Future<ProtectedWrite> authorization;
+        ProtectedEntityWriteRegistry.notifySubmitBegin(1);
+        try {
+            authorization = authorizeAndInspect(argument);
+        } finally {
+            ProtectedEntityWriteRegistry.notifySubmitEnd();
+        }
+        return authorization
             .compose(protectedWrite -> targetProvider.executeSubmit(translateSubmit(argument))
                 .onSuccess(ignored -> reportIfProtected(protectedWrite)));
     }
@@ -87,9 +97,19 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
         // where the caller's identity is no longer readable — so the first statement of a batch was
         // judged as the user and the rest as nobody. The authorizer fails closed, which turned that
         // into refusals rather than a silent hole, but it refused legitimate work either way.
+        //
+        // That synchronous pass is also what makes the submit boundary worth reporting: the writes of
+        // one transaction arrive as a contiguous run, and an inspector told where it starts and stops
+        // can answer what ONE caller action contained — which organizations it touched, and whether it
+        // could name a single operation. In a finally, so a refusal still closes the group.
         List<Future<ProtectedWrite>> authorizations = new ArrayList<>();
-        for (SubmitArgument argument : batch.getArray())
-            authorizations.add(authorizeAndInspect(argument));
+        ProtectedEntityWriteRegistry.notifySubmitBegin(batch.getArray().length);
+        try {
+            for (SubmitArgument argument : batch.getArray())
+                authorizations.add(authorizeAndInspect(argument));
+        } finally {
+            ProtectedEntityWriteRegistry.notifySubmitEnd();
+        }
         return Future.all(new ArrayList<>(authorizations))
             .compose(ignored -> targetProvider.executeSubmitBatch(translateBatch(batch))
                 .onSuccess(result -> {
