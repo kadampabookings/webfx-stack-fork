@@ -244,6 +244,19 @@ public final class ProtectedEntityWriteRegistry {
         default void onSubmitBegin(int statementCount) {}
 
         /**
+         * What one statement of the open submit DECLARED it was doing — untrusted, and reported so that
+         * a measurement can be taken before anything trusts it.
+         *
+         * <p>Reported per statement rather than per submit because the field is per statement, and
+         * that is itself the thing being measured: whether the statements of one caller action all name
+         * the same operation, or whether some actions are composite and must either split or keep the
+         * per-entity map. An inspector is not told which write each declaration belongs to, because the
+         * question is about the submit, not the statement — which also means no ordering between this
+         * and {@link #onWrite} has to be relied on.
+         */
+        default void onDeclaredIntent(WriteIntent intent) {}
+
+        /**
          * That submit is complete, whether or not it was authorized or executed.
          *
          * <p>Called from a finally, so a refusal or a throw between the two still closes the group: an
@@ -296,6 +309,17 @@ public final class ProtectedEntityWriteRegistry {
         if (currentInspector != null) {
             try {
                 currentInspector.onSubmitBegin(statementCount);
+            } catch (RuntimeException ignored) {
+            }
+        }
+    }
+
+    /** Never throws into the caller, for the same reason as {@link #notifyWriteInspected}. */
+    public static void notifyDeclaredIntent(WriteIntent intent) {
+        WriteInspector currentInspector = inspector;
+        if (currentInspector != null) {
+            try {
+                currentInspector.onDeclaredIntent(intent);
             } catch (RuntimeException ignored) {
             }
         }

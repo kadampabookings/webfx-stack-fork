@@ -465,6 +465,12 @@ public class DqlSubmitInterceptorInitializer implements ApplicationJob {
                              // answer depends on request-scoped state the application can still read
                              // here and could not a moment later.
                              && ProtectedEntityWriteRegistry.isInspectingWrite();
+        // Told before anything else about this statement: the declaration is the caller's own claim, and
+        // reporting it costs nothing whether or not the statement turns out to be parseable, protected,
+        // or even a write. Nothing trusts it yet — this step is the measurement that decides whether a
+        // caller action can name one operation at all.
+        if (inspecting && argument.getWriteIntent() != null)
+            ProtectedEntityWriteRegistry.notifyDeclaredIntent(argument.getWriteIntent());
         if (!maybeProtected && !inspecting)
             return Future.succeededFuture(null);
         Object dataSourceId = argument.getDataSourceId();
