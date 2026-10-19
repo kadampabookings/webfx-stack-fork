@@ -1,5 +1,8 @@
 package dev.webfx.stack.db.query;
 
+import dev.webfx.platform.console.spi.ConsoleProvider;
+import dev.webfx.platform.service.SingleServiceProvider;
+
 import java.util.Arrays;
 
 /**
@@ -19,18 +22,32 @@ public class ServerCallerParametersCheck {
     static int pass = 0, fail = 0;
 
     public static void main(String[] args) {
+        // The guard REPORTS every refusal through Console, and with no provider registered that logging throws
+        // a ServiceConfigurationError which masks whatever the check was actually asserting. A silent provider
+        // lets the assertions through. (This was hidden until now behind an earlier failure in this same main.)
+        SingleServiceProvider.registerServiceProvider(ConsoleProvider.class, new ConsoleProvider() {
+            @Override public void log(String message) { }
+            @Override public void error(String message, Throwable error) { }
+        });
+
+        // Object, not a chain of ints: the conditional expression would otherwise be typed int and unbox the
+        // null answer for every reserved name this resolver does not supply.
         ServerCallerParameters.registerResolver(name ->
-            "caller.person".equals(name) ? 101 : "caller.account".equals(name) ? 202 : null);
+            "caller.person".equals(name) ? (Object) 101 : "caller.account".equals(name) ? (Object) 202 : null);
 
         QueryArgument plain = argument("select id from Document d where event=$1", 7);
         check("a statement naming no caller term is untouched", ServerCallerParameters.attach(plain) == plain);
 
         QueryArgument using = argument("select id from Document d where person=CALLER_PERSON and event=$1", 7);
         QueryArgument attached = ServerCallerParameters.attach(using);
+        // Every reserved name is attached, including the ones this resolver does not answer: a name with a null
+        // value is bound as null and matches nothing, where a name left off entirely would be a term the
+        // binding seam cannot resolve and would refuse the whole statement by name.
         check("the caller's own values are appended, in reserved-name order",
-              Arrays.equals(attached.getParameters(), new Object[]{7, 101, 202}));
+              Arrays.equals(attached.getParameters(), new Object[]{7, 101, 202, null, null}));
         check("and named, so the binding seam can find them",
-              Arrays.equals(attached.getParameterNames(), new String[]{"caller.person", "caller.account"}));
+              Arrays.equals(attached.getParameterNames(), new String[]{"caller.person", "caller.account",
+                  "caller.grantedEvents", "caller.grantedOrganizations"}));
         check("the caller's positional values are left where they were",
               attached.getParameters()[0].equals(7));
 
@@ -41,7 +58,7 @@ public class ServerCallerParametersCheck {
               ServerCallerParameters.attach(mentions) != mentions);
 
         // THE property the design rests on.
-        ServerCallerParameters.registerResolver(name -> "caller.person".equals(name) ? 999 : null);
+        ServerCallerParameters.registerResolver(name -> "caller.person".equals(name) ? (Object) 999 : null);
         QueryArgument otherCaller = ServerCallerParameters.attach(
             argument("select id from Document d where person=CALLER_PERSON and event=$1", 7));
         check("two callers running the same statement are NOT equal arguments",

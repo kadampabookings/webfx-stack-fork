@@ -6,6 +6,8 @@ import dev.webfx.stack.orm.dql.sqlcompiler.sql.dbms.PostgresSyntax;
 import dev.webfx.stack.orm.expression.parser.ExpressionParser;
 import dev.webfx.stack.orm.expression.parser.lci.mock.ParserDomainModelReaderMock;
 import dev.webfx.stack.orm.expression.terms.DqlStatement;
+import dev.webfx.platform.console.spi.ConsoleProvider;
+import dev.webfx.platform.service.SingleServiceProvider;
 
 /**
  * That a scope condition reaches every select in a statement, not just the outermost one.
@@ -24,6 +26,13 @@ public class ClientReadScopeCheck {
     static int pass = 0, fail = 0;
 
     public static void main(String[] args) {
+        // The parser logs through Console before rethrowing, and with no provider registered that logging
+        // throws a ServiceConfigurationError of its own - which MASKS every parse refusal as "cannot
+        // instantiate ConsoleProvider". A silent provider lets the real exception through.
+        SingleServiceProvider.registerServiceProvider(ConsoleProvider.class, new ConsoleProvider() {
+            @Override public void error(String message, Throwable error) { }
+        });
+
         // A provider that scopes Document only, so the checks can also show it leaves other entities alone.
         ClientReadScope.registerProvider((domainClass, scopeToken) ->
             "Document".equals(String.valueOf(domainClass))
@@ -92,6 +101,27 @@ public class ClientReadScopeCheck {
               "select id from Person p where email=$1", 5,
               "select p.id, p.id from person as p where p.email=$1 and exists(select tt1.id from document as tt1 where tt1.event=any($2) and tt1.person_id=p.id)");
 
+        // THE KEYWORD FORM, which is what a rule will really be written with: a term the client cannot
+        // forge, not a name in the channel the client fills. `in` has to read it as an ARRAY - a scalar
+        // `in ($n)` cannot be bound an array by the driver, so this is a runtime bind failure if the
+        // compiler does not know the term supplies many values.
+        ClientReadScope.registerProvider((domainClass, scopeToken) ->
+            "Person".equals(String.valueOf(domainClass))
+                ? ExpressionParser.parseExpression("exists(select Document where event in CALLER_GRANTED_EVENTS and person=this)", domainClass, model())
+                : null);
+
+        check("the array-valued caller term compiles to = any(), not in ()",
+              "select id from Person p where email=$1", 5,
+              "select p.id, p.id from person as p where p.email=$1 and exists(select tt1.id from document as tt1 where tt1.event=any($2) and tt1.person_id=p.id)");
+
+        // The bare form is only for a term that supplies MANY values. A scalar one on that path, or a plain
+        // column, is a mistake that used to be a parse error and must stay one - otherwise the widening
+        // needed for the line above would cost every statement in the system the error it used to get.
+        checkParseRefused("a scalar caller term may not take the bare 'in' path", "id in CALLER_PERSON");
+        checkParseRefused("a column may not either", "id in organization");
+        checkParses("a parameter still may", "id in $1");
+        checkParses("and so does a list", "id in (1, 2)");
+
         // No scope inside a scope. The condition above reads Document, and Document is scoped too - but the
         // condition is server-authored and already says what it means, so it is applied as written. Without
         // this, a pair of conditions that reach each other would recurse until the stack gave out.
@@ -135,6 +165,43 @@ public class ClientReadScopeCheck {
                 .declareFields("Document", "id,ref,event,person,organization")
                 .declareFields("Person", "id,email,organization,document")
                 .declareFields("DocumentLine", "id,document,item");
+    }
+
+    private static void checkParseRefused(String what, String expression) {
+        try {
+            ExpressionParser.parseExpression(expression, "Person", model());
+            fail++;
+            System.out.println("  FAIL " + what + " — parsed instead of being refused");
+        } catch (Throwable t) {
+            // The parser wraps what a builder throws, so the refusal is looked for in the cause chain
+            // rather than at the top: catching IllegalArgumentException alone reports every real refusal
+            // as the wrong kind of failure.
+            if (isCausedByIllegalArgument(t)) {
+                pass++;
+                System.out.println("  ok   " + what);
+            } else {
+                fail++;
+                System.out.println("  FAIL " + what + " — refused, but with " + t);
+            }
+        }
+    }
+
+    private static boolean isCausedByIllegalArgument(Throwable t) {
+        for (Throwable cause = t; cause != null; cause = cause.getCause())
+            if (cause instanceof IllegalArgumentException)
+                return true;
+        return false;
+    }
+
+    private static void checkParses(String what, String expression) {
+        try {
+            ExpressionParser.parseExpression(expression, "Person", model());
+            pass++;
+            System.out.println("  ok   " + what);
+        } catch (Throwable t) {
+            fail++;
+            System.out.println("  FAIL " + what + " — " + t);
+        }
     }
 
     private static void checkRefused(String what, String dql, Object scopeToken) {

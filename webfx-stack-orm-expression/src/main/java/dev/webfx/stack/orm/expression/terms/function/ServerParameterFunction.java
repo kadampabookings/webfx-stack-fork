@@ -27,16 +27,36 @@ public class ServerParameterFunction<T> extends Function<T> {
     public static final String PARAMETER_NAME_PREFIX = "caller.";
 
     private final String parameterName;
+    private final boolean arrayValued;
 
     public ServerParameterFunction(String name, String parameterName, Type returnType) {
+        this(name, parameterName, returnType, false);
+    }
+
+    public ServerParameterFunction(String name, String parameterName, Type returnType, boolean arrayValued) {
         // evaluable=false: no client can work this out for itself, so it is compiled into SQL wherever it
         // appears, including a select list. keyword=true: written bare, with no parentheses.
         super(name, returnType, false, true);
         this.parameterName = parameterName;
+        this.arrayValued = arrayValued;
     }
 
     /** The reserved name under which the server supplies this term's value at execution. */
     public String getParameterName() {
         return parameterName;
+    }
+
+    /**
+     * Whether the server supplies MANY values rather than one, so that {@code x in THIS_TERM} means
+     * membership of an array.
+     *
+     * <p>Declared on the term rather than inferred, because the two readings are both valid SQL and only
+     * one is ever meant: {@code x in CALLER_PERSON} is a scalar comparison, {@code x in
+     * CALLER_GRANTED_EVENTS} is {@code x = any(…)}. Postgres cannot bind an array to a scalar
+     * {@code in ($n)}, so getting this wrong is a runtime bind failure rather than a wrong answer -
+     * which is the better of the two, but only just.
+     */
+    public boolean isArrayValued() {
+        return arrayValued;
     }
 }

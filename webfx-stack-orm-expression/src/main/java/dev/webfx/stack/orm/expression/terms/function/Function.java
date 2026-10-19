@@ -48,6 +48,13 @@ public class Function<T> {
         // because compiled SQL is cached by statement text and two callers send the same text.
         new ServerParameterFunction<>("CALLER_PERSON", "caller.person", PrimType.LONG).register();
         new ServerParameterFunction<>("CALLER_ACCOUNT", "caller.account", PrimType.LONG).register();
+        // The caller's READ SCOPE, flattened by the server into one array each: the events their grants
+        // cover, and the organisations they hold whole. Arrays rather than a value per grant because the
+        // predicate is ANDed into somebody else's statement and cannot grow a clause per row, and because
+        // an empty array is false for every row - the floor a caller with no grants lands on, which
+        // `in ()` could not even compile.
+        new ServerParameterFunction<>("CALLER_GRANTED_EVENTS", "caller.grantedEvents", PrimType.LONG, true).register();
+        new ServerParameterFunction<>("CALLER_GRANTED_ORGANIZATIONS", "caller.grantedOrganizations", PrimType.LONG, true).register();
 
         new Sum().register();
         new StringAgg().register();

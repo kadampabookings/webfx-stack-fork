@@ -48,7 +48,8 @@ public final class ServerCallerParameters {
      * is missing here compiles to a parameter nothing supplies, and the binding seam then refuses the query
      * by name rather than letting it reach the driver.
      */
-    private static final String[] RESERVED_NAMES = {"caller.person", "caller.account"};
+    private static final String[] RESERVED_NAMES = {"caller.person", "caller.account",
+        "caller.grantedEvents", "caller.grantedOrganizations"};
 
     /**
      * The prefix every server-supplied name carries — the same as {@code ServerParameterFunction.PARAMETER_NAME_PREFIX},
