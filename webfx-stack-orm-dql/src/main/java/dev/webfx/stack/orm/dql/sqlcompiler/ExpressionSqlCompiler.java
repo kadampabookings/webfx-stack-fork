@@ -67,6 +67,7 @@ public final class ExpressionSqlCompiler {
                 new ParameterReferenceSqlCompiler(), // ParameterReference
                 new CastSqlCompiler(),               // Cast
                 new IdSqlCompiler(),                 // IdExpression
+                new ThisSqlCompiler(),               // This
                 new CteColumnRefSqlCompiler(),       // CteColumnRef
                 new SymbolSqlCompiler()              // Symbol (then extendable using)
         );
@@ -404,9 +405,25 @@ public final class ExpressionSqlCompiler {
         // a subquery, a CTE body and each branch of a union without any of them being named here. Compiled
         // like any other expression, so the denying reader sees every column it touches and its parameters
         // are numbered alongside the caller's rather than spliced in as text.
-        Expression<?> scopeCondition = ClientReadScope.conditionFor(dqlStatement.getDomainClass(), sqlBuild.getScopeToken());
-        if (scopeCondition != null)
-            compileExpression(scopeCondition, new Options(sqlBuild, SqlClause.WHERE, " and ", grouped, false, false, modelReader));
+        Expression<?> scopeCondition = sqlBuild.isCompilingScopeCondition() ? null
+            : ClientReadScope.conditionFor(dqlStatement.getDomainClass(), sqlBuild.getScopeToken());
+        if (scopeCondition != null) {
+            // The row being scoped is recorded before the condition is compiled, so that a 'this' inside it
+            // - the term that correlates a subquery back to this row - knows what alias to emit. It cannot
+            // read that from the build it is compiled by: inside exists(select Document where person = this)
+            // that build is the subquery's, whose compiling class is Document.
+            Object previousScopeRowClass = sqlBuild.getScopeRowDomainClass();
+            String previousScopeRowAlias = sqlBuild.getScopeRowAlias();
+            boolean wasCompilingScopeCondition = sqlBuild.isCompilingScopeCondition();
+            sqlBuild.setScopeRow(dqlStatement.getDomainClass(), sqlBuild.getClassAlias(dqlStatement.getDomainClass(), modelReader));
+            sqlBuild.setCompilingScopeCondition(true);
+            try {
+                compileExpression(scopeCondition, new Options(sqlBuild, SqlClause.WHERE, " and ", grouped, false, false, modelReader));
+            } finally {
+                sqlBuild.setCompilingScopeCondition(wasCompilingScopeCondition);
+                sqlBuild.setScopeRow(previousScopeRowClass, previousScopeRowAlias);
+            }
+        }
         if (dqlStatement.getOrderBy() != null)
             compileExpression(dqlStatement.getOrderBy(), new Options(sqlBuild, SqlClause.ORDER_BY, ", ", grouped, false, false, modelReader));
         if (dqlStatement.getLimit() != null && dbmsSyntax != HsqlSyntax.get()) // temporary fix

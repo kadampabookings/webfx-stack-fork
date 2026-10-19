@@ -63,23 +63,102 @@ public class ClientReadScopeCheck {
               "select id from Document d where person.email=$1", null,
               "select d.id, d.id from document as d join person j2 on j2.id=d.person_id where j2.email=$1");
 
+        // THE CORRELATION TERM. The rule for Person is not a column test - a person is readable because they
+        // booked one of the events in scope - so the condition has to point back at the person row it is
+        // filtering. 'this' is that pointer, and the alias it needs is the one the compiler chose for the
+        // OUTER select, which the subquery's own build does not know.
+        ClientReadScope.registerProvider((domainClass, scopeToken) ->
+            "Person".equals(String.valueOf(domainClass))
+                ? ExpressionParser.parseExpression("exists(select Document where event=" + scopeToken + " and person=this)", domainClass, model())
+                : null);
+
+        check("'this' correlates a scope subquery back to the scoped row",
+              "select id from Person p where email=$1", 5,
+              "select p.id, p.id from person as p where p.email=$1 and exists(select tt1.id from document as tt1 where tt1.event=5 and tt1.person_id=p.id)");
+
+        check("'this' still correlates when the scoped row is reached by a join",
+              "select id from Document d where person.email=$1", 5,
+              "select d.id, d.id from document as d join person j2 on j2.id=d.person_id and (exists(select tt1.id from document as tt1 where tt1.event=5 and tt1.person_id=j2.id)) where j2.email=$1");
+
+        // The rule as it will really be written: the events in scope arrive as ONE array parameter rather
+        // than being pasted in as a literal, and it has to be a named one - a server-authored rule cannot
+        // know how many positional slots the client's own statement already took.
+        ClientReadScope.registerProvider((domainClass, scopeToken) ->
+            "Person".equals(String.valueOf(domainClass))
+                ? ExpressionParser.parseExpression("exists(select Document where event in ?scopeEvents and person=this)", domainClass, model())
+                : null);
+
+        check("the rule as it will be written: an array parameter and a correlation",
+              "select id from Person p where email=$1", 5,
+              "select p.id, p.id from person as p where p.email=$1 and exists(select tt1.id from document as tt1 where tt1.event=any($2) and tt1.person_id=p.id)");
+
+        // No scope inside a scope. The condition above reads Document, and Document is scoped too - but the
+        // condition is server-authored and already says what it means, so it is applied as written. Without
+        // this, a pair of conditions that reach each other would recurse until the stack gave out.
+        ClientReadScope.registerProvider((domainClass, scopeToken) -> {
+            String name = String.valueOf(domainClass);
+            if ("Person".equals(name))
+                return ExpressionParser.parseExpression("exists(select Document where person=this)", domainClass, model());
+            if ("Document".equals(name))
+                return ExpressionParser.parseExpression("exists(select Person where document=this)", domainClass, model());
+            return null;
+        });
+
+        check("a condition is not scoped again by the entity it reads",
+              "select id from Person p where email=$1", 5,
+              "select p.id, p.id from person as p where p.email=$1 and exists(select tt1.id from document as tt1 where tt1.person_id=p.id)");
+
+        // And outside a condition the term has no referent, so it is refused rather than compiled to
+        // something plausible. No client statement can carry it - scope conditions are server-authored -
+        // but a provider that returned a bare 'this' would otherwise emit a silently wrong column.
+        ClientReadScope.registerProvider((domainClass, scopeToken) -> null);
+        checkRefused("'this' outside a scope condition is refused",
+              "select id from Person p where id=this", 5);
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " scope injection checks failed");
     }
 
+    /**
+     * Document.person declared foreign up front, because the mock otherwise learns FK-ness lazily - the
+     * first dot navigation registers it - so the same field compiled to "person" in one check and
+     * "person_id" in another depending on which ran first.
+     */
+    private static CompilerDomainModelReaderMock compilerModel() {
+        return new CompilerDomainModelReaderMock()
+                .declareAsForeignField("Document", "person");
+    }
+
     private static ParserDomainModelReaderMock model() {
         return new ParserDomainModelReaderMock()
                 .declareFields("Document", "id,ref,event,person,organization")
-                .declareFields("Person", "id,email,organization")
+                .declareFields("Person", "id,email,organization,document")
                 .declareFields("DocumentLine", "id,document,item");
+    }
+
+    private static void checkRefused(String what, String dql, Object scopeToken) {
+        try {
+            DqlStatement<?> statement = ExpressionParser.parseStatement(dql, model());
+            SqlCompiled compiled = ExpressionSqlCompiler.compileForScope(
+                statement, scopeToken, PostgresSyntax.get(), false, false, false, compilerModel());
+            fail++;
+            System.out.println("  FAIL " + what);
+            System.out.println("         compiled instead to " + compiled.getSql());
+        } catch (IllegalArgumentException e) {
+            pass++;
+            System.out.println("  ok   " + what);
+        } catch (Throwable t) {
+            fail++;
+            System.out.println("  FAIL " + what + " — refused, but with " + t);
+        }
     }
 
     private static void check(String what, String dql, Object scopeToken, String expectedSql) {
         try {
             DqlStatement<?> statement = ExpressionParser.parseStatement(dql, model());
             SqlCompiled compiled = ExpressionSqlCompiler.compileForScope(
-                statement, scopeToken, PostgresSyntax.get(), false, false, false, new CompilerDomainModelReaderMock());
+                statement, scopeToken, PostgresSyntax.get(), false, false, false, compilerModel());
             if (expectedSql.equals(compiled.getSql())) {
                 pass++;
                 System.out.println("  ok   " + what);
