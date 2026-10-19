@@ -31,6 +31,14 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
     }
 
     public static Future<IsolatedSession> manageStateOnIncomingOrOutgoingRawJsonMessage(AstObject rawJsonMessage, IsolatedSession serverSession, boolean incoming) {
+        return manageStateOnIncomingOrOutgoingRawJsonMessage(rawJsonMessage, serverSession, incoming, null);
+    }
+
+    /**
+     * @param clientAddress for an incoming message, the caller's network address as the transport read it (null
+     *                      when it could not); stamped on the state in place of whatever the client sent
+     */
+    public static Future<IsolatedSession> manageStateOnIncomingOrOutgoingRawJsonMessage(AstObject rawJsonMessage, IsolatedSession serverSession, boolean incoming, String clientAddress) {
         AstObject headers = rawJsonMessage.getObject(JsonBusConstants.HEADERS);
         Object originalState = headers == null ? null : StateAccessor.decodeState(headers.getString(JsonBusConstants.HEADERS_STATE));
 
@@ -52,6 +60,8 @@ public final class ServerJsonBusStateManager implements JsonBusConstants {
             // decisions, sees it. A message that arrived with no state at all gets one created here: the
             // absence of a state header must not be a way to arrive unstamped.
             originalState = StateAccessor.setClientOrigin(originalState, true);
+            // The caller's address, under the same rule: overwritten, null included, so a client cannot name its own.
+            StateAccessor.setClientAddress(originalState, clientAddress);
             // We sync the application serverSession with the incoming state. This is at this point that the serverSession
             // switch can happen if requested by the client, in which case a different serverSession will be returned.
             return ServerSideStateSessionSyncer.syncIncomingState(serverSession, originalState)

@@ -30,6 +30,7 @@ public final class StateAccessor {
     // Stamped on every server-emitted state envelope; clients drop any envelope without it.
     private final static String SERVER_ORIGIN_ATTRIBUTE_NAME = "serverOrigin";
     private final static String CLIENT_ORIGIN_ATTRIBUTE_NAME = "clientOrigin"; // Stamped by the bridge on everything arriving from outside
+    private final static String CLIENT_ADDRESS_ATTRIBUTE_NAME = "clientAddress"; // The caller's network address, stamped by the bridge too
     private final static String TOKEN_REQUIRED_ATTRIBUTE_NAME = "tokenRequired"; // Server->client: is a token required to claim an identity?
     // The session family named by the token this message presented, recorded once the signature has held.
     // SERVER-INTERNAL: written by the session syncer and read by whatever needs to act on the session as a
@@ -296,6 +297,26 @@ public final class StateAccessor {
 
     public static Object setClientOrigin(Object state, Boolean clientOrigin) {
         return setStateAttribute(state, CLIENT_ORIGIN_ATTRIBUTE_NAME, clientOrigin, true);
+    }
+
+    /**
+     * The network address this call came from — stamped by the SockJS bridge, never by a caller.
+     *
+     * <p>Trustworthy for the same reason as {@link #isClientOrigin}: the bridge sets it on every inbound frame and
+     * OVERWRITES whatever arrived, null included, so a client that sends its own {@code clientAddress} is simply
+     * corrected. Behind the load balancer it is the address the balancer saw, not anything the client claimed.
+     *
+     * <p>Meant for counting — rate limits keyed per caller — and for nothing that decides WHO someone is: many
+     * people share one address (a centre's wifi, a mobile carrier's NAT), and one person moves between several.
+     * Null for server-internal work, and for a frame whose address the bridge could not read.
+     */
+    public static String getClientAddress(Object state) {
+        Object address = getStateAttribute(state, CLIENT_ADDRESS_ATTRIBUTE_NAME);
+        return address instanceof String s ? s : null;
+    }
+
+    public static Object setClientAddress(Object state, String clientAddress) {
+        return setStateAttribute(state, CLIENT_ADDRESS_ATTRIBUTE_NAME, clientAddress, true);
     }
 
     private static Object getStateAttribute(Object state, String name) {

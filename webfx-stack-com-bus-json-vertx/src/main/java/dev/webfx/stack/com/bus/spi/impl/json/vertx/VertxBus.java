@@ -199,7 +199,8 @@ final class VertxBus implements Bus {
 
                 if (!isEverythingElse) { // Statement management is required except for the last case
                     Future<IsolatedSession> sessionFuture =
-                        ServerJsonBusStateManager.manageStateOnIncomingOrOutgoingRawJsonMessage(astMessage, webfxSession, isIncomingMessage);
+                        ServerJsonBusStateManager.manageStateOnIncomingOrOutgoingRawJsonMessage(astMessage, webfxSession, isIncomingMessage,
+                            isIncomingMessage ? clientAddressOf(socket) : null);
                     // If the session is not ready right now (this may happen because of a session switch), then
                     // we need to wait this operation to complete before continuing the message delivery
                     if (isIncomingMessage && !sessionFuture.isComplete()) {
@@ -219,6 +220,40 @@ final class VertxBus implements Bus {
         // If the session is ready right now, we continue the message delivery right now
         if (callBridgeEventComplete)
             bridgeEvent.complete(true);
+    }
+
+    /** The caller's network address for this socket, or null — see {@link #clientAddressOf(String, String)}. */
+    private static String clientAddressOf(SockJSSocket socket) {
+        try {
+            io.vertx.core.net.SocketAddress remote = socket.remoteAddress();
+            // The LAST header line, not get()'s first: should a client send its own X-Forwarded-For and the balancer
+            // add a separate line rather than append to it, the first line would be the client's.
+            List<String> forwardedFor = socket.headers() == null ? null : socket.headers().getAll("X-Forwarded-For");
+            return clientAddressOf(forwardedFor == null || forwardedFor.isEmpty() ? null : forwardedFor.get(forwardedFor.size() - 1),
+                remote == null ? null : remote.hostAddress());
+        } catch (RuntimeException e) { // an address is a convenience for counting; never a reason to drop a message
+            return null;
+        }
+    }
+
+    /**
+     * The caller's network address: the LAST entry of X-Forwarded-For when there is one, else the socket's peer.
+     *
+     * <p>The last entry, not the first, because only the last is written by our own load balancer: the AWS ALB
+     * APPENDS the address it saw to whatever the client sent, so every earlier entry is the client's to choose.
+     * Taking the first would let a caller reset any per-address count by sending a fresh header each time.
+     *
+     * <p>Without a proxy (a developer's machine) the header is the client's own and the last entry is as forgeable
+     * as the rest; there, only the peer address would be honest. Production always sits behind the ALB.
+     */
+    static String clientAddressOf(String forwardedFor, String peerAddress) {
+        if (forwardedFor != null) {
+            int comma = forwardedFor.lastIndexOf(',');
+            String last = forwardedFor.substring(comma + 1).trim();
+            if (!last.isEmpty())
+                return last;
+        }
+        return peerAddress == null || peerAddress.isEmpty() ? null : peerAddress;
     }
 
     private void logSessionsCount() {
