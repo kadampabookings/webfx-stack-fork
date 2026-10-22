@@ -231,6 +231,12 @@ final class VertxHttpRouterConfigurator {
                 fallbackRoute = fallbackRoute.virtualHost(hostnamePattern);
             fallbackRoute.handler(routingContext -> {
                 String acceptHeader = routingContext.request().getHeader("Accept");
+                // A path that names a file the static handler above did not find is not an application
+                // route, whatever it claims to accept — so it gets a 404 rather than the app shell.
+                if (looksLikeMissingFile(routingContext.request().path())) {
+                    routingContext.next();
+                    return;
+                }
                 if (acceptHeader != null && acceptHeader.contains("text/html")) {
                     routingContext.response()
                         .putHeader("Content-Type", "text/html; charset=UTF-8")
@@ -282,8 +288,78 @@ final class VertxHttpRouterConfigurator {
         return extractedPath;
     }
 
+    /**
+     * Whether a path names a FILE rather than an application route.
+     *
+     * <p>Only reached once the static handler has looked and found nothing, so a true here means a file
+     * that does not exist. Two things follow from answering 404 instead of the app shell. Internet
+     * scanners asking for {@code /forum.php}, {@code /.env} or {@code /wp-login.php} stop being served a
+     * 38 KB page each — they were, because they send {@code Accept: text/html} like any browser. And a
+     * stale asset request after a deploy — {@code /assets/index-OLDHASH.js} — gets a 404 instead of HTML,
+     * which is the difference between a clean failure and "Unexpected token '&lt;'" in the console.
+     *
+     * <p><b>A SHORT extension, which is the whole subtlety.</b> Signed tokens are dot-separated
+     * ({@code base64(payload).expiry.base64(hmac)}), so {@code /magic-link/<token>} ends in a dot
+     * followed by a 43-character base64 MAC. Treating any dot as a file extension would have made every
+     * magic link, every invitation and every e-mail-change link 404 — sign-in by e-mail, gone. One to
+     * five characters admits .php, .env, .git, .sql, .ini, .bak, .woff2 and the rest of the scanner
+     * vocabulary while excluding anything a MAC can be.
+     *
+     * <p>Deliberately NOT a list of bad extensions: that is endless, always one pattern behind, and would
+     * still have served the shell for {@code /backup.sql}.
+     */
+    static boolean looksLikeMissingFile(String path) {
+        if (path == null)
+            return false;
+        // A segment beginning with a dot is a dotfile or a dot-directory — /.env, /.git/config,
+        // /.aws/credentials — never a route here, and the first thing a credential scanner asks for.
+        // Checked separately because /.git/config has no extension on its last segment at all.
+        for (int i = 0; i < path.length() - 1; i++)
+            if (path.charAt(i) == '/' && path.charAt(i + 1) == '.')
+                return true;
+        int lastSlash = path.lastIndexOf('/');
+        String segment = lastSlash < 0 ? path : path.substring(lastSlash + 1);
+        int dot = segment.lastIndexOf('.');
+        if (dot < 0 || dot == segment.length() - 1)
+            return false;
+        String extension = segment.substring(dot + 1);
+        if (extension.length() > 5)
+            return false;
+        for (int i = 0; i < extension.length(); i++)
+            if (!Character.isLetterOrDigit(extension.charAt(i)))
+                return false;
+        return true;
+    }
+
+    /**
+     * Whether a request failed because its BODY could not be decoded — a malformed or oversized
+     * multipart form, which is what scanners produce when they POST junk at a route that takes uploads.
+     *
+     * <p>Matched on the class NAME so that nothing here has to import Netty's codec internals (and so
+     * that the pom this plugin ships with needs no new dependency). The alternative is what we had: every
+     * such probe logging "Unhandled exception in router" at ERROR, which is noise in the one signal an
+     * operator reads to find real failures — and, in production, noise an alarm filter can trip over.
+     */
+    static boolean isBodyDecoderFailure(Throwable failure) {
+        for (Throwable t = failure; t != null; t = t.getCause())
+            if (t.getClass().getName().startsWith("io.netty.handler.codec"))
+                return true;
+        return false;
+    }
+
     static void finaliseRouter() {
         Router router = VertxInstance.getHttpRouter();
         router.route().handler(BodyHandler.create());
+        // A body that will not decode is the client's doing, not ours: answer 400 and keep it out of the
+        // error log. Registered after the BodyHandler so it is in the chain for the routes that read a
+        // body; anything else it does not recognise is passed on to the default handler untouched.
+        router.route().failureHandler(routingContext -> {
+            if (isBodyDecoderFailure(routingContext.failure())) {
+                if (!routingContext.response().ended())
+                    routingContext.response().setStatusCode(400).end();
+                return;
+            }
+            routingContext.next();
+        });
     }
 }
