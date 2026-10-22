@@ -230,20 +230,13 @@ final class VertxHttpRouterConfigurator {
             if (hostnamePattern != null)
                 fallbackRoute = fallbackRoute.virtualHost(hostnamePattern);
             fallbackRoute.handler(routingContext -> {
-                String acceptHeader = routingContext.request().getHeader("Accept");
-                // A path that names a file the static handler above did not find is not an application
-                // route, whatever it claims to accept — so it gets a 404 rather than the app shell.
-                if (looksLikeMissingFile(routingContext.request().path())) {
+                if (!wantsThePage(routingContext.request().path(), routingContext.request().getHeader("Accept"))) {
                     routingContext.next();
                     return;
                 }
-                if (acceptHeader != null && acceptHeader.contains("text/html")) {
-                    routingContext.response()
-                        .putHeader("Content-Type", "text/html; charset=UTF-8")
-                        .sendFile(finalIndexPath);
-                } else {
-                    routingContext.next();
-                }
+                routingContext.response()
+                    .putHeader("Content-Type", "text/html; charset=UTF-8")
+                    .sendFile(finalIndexPath);
             });
         }
     }
@@ -286,6 +279,40 @@ final class VertxHttpRouterConfigurator {
         EXTRACTED_ARCHIVED_FOLDERS.put(archiveWithInternalPath, extractedPath);
 
         return extractedPath;
+    }
+
+    /** Our own namespaces: a request here is an endpoint call, and a typo in one must fail as one. */
+    private static final String[] API_PREFIXES = { "/rest/", "/eventbus/", "/payment/" };
+
+    /**
+     * Whether this request should be answered with the application shell.
+     *
+     * <p>Three reasons to say no, and the third one is the one that changed.
+     *
+     * <p>A path that names a FILE the static handler did not find is not a route (see
+     * {@link #looksLikeMissingFile}). A path under one of our own API namespaces is an endpoint call:
+     * answering HTML with a 200 for a typo'd endpoint is how a caller ends up parsing "&lt;" as JSON,
+     * so those keep failing as endpoints.
+     *
+     * <p>Otherwise the shell is served unless the client asked for something that is explicitly NOT a
+     * page. This used to require {@code Accept} to contain {@code text/html}, which browsers send and
+     * almost nothing else does — so every link-preview fetch got a 404, and a front-office URL shared
+     * on WhatsApp, Facebook or Slack rendered with no preview card at all. Measured on production,
+     * 2026-10-22: 33 requests a day to /video-streaming alone, one of them literally
+     * {@code WhatsApp/2.23.20.0}, the rest in-app Android fetches. An absent, blank or {@code &#42;/&#42;}
+     * Accept now gets the page, which is what those clients send; {@code Accept: application/json}
+     * still gets a 404.
+     */
+    static boolean wantsThePage(String path, String acceptHeader) {
+        if (looksLikeMissingFile(path))
+            return false;
+        if (path != null)
+            for (String prefix : API_PREFIXES)
+                if (path.startsWith(prefix))
+                    return false;
+        if (acceptHeader == null || acceptHeader.isBlank())
+            return true;
+        return acceptHeader.contains("text/html") || acceptHeader.contains("*/*");
     }
 
     /**
