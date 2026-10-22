@@ -233,14 +233,13 @@ public abstract class ServerQueryPushServiceProviderBase implements QueryPushSer
      * read both. Neither is a secret exactly — the first is discoverable by sending one message without
      * a token — but publishing it removes the cost of asking and the chance of anyone noticing.
      *
-     * <p><b>Advisory, not a boundary.</b> The back-office flag is asserted by the client, so a caller
-     * determined to see these five numbers can set it. It keeps them out of an ordinary member's
-     * session, and claims nothing more. The boundary would be a server-side operation check on this
-     * endpoint, which does not exist yet — the same precondition the alarm-mode control waits on.
-     * Fails closed: no flag, no section.
+     * <p><b>Read from the verified audience (2026-10-22)</b>, not the flag the client asserts: a signed-in
+     * front-office session can no longer claim its way in. It is still not an operation check — any
+     * back-office session sees it — which is the boundary the alarm-mode control waits on.
+     * Fails closed: no back-office audience, no section.
      */
     private static SessionSecurityMonitorInfo buildSessionSecurityInfo() {
-        return ThreadLocalStateHolder.isBackoffice() ? SessionSecurityMonitorRegistry.snapshot() : null;
+        return ThreadLocalStateHolder.isEffectivelyBackoffice() ? SessionSecurityMonitorRegistry.snapshot() : null;
     }
 
     private static BootJobFailureMonitorInfo[] buildBootFailures() {

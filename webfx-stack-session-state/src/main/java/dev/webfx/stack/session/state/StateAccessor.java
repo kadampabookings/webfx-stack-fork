@@ -300,6 +300,23 @@ public final class StateAccessor {
     }
 
     /**
+     * Whether this caller is a back-office one, for any decision that GRANTS something: the verified audience when
+     * there is one, the client's claim only when there is not.
+     *
+     * <p>The {@code backoffice} flag is re-sent by the client on every message, so a front-office session could
+     * claim it and be judged by back-office grants — the ones its login never earned (no back-office account check,
+     * no three-hour tier, no second factor). The verified audience is signed into the session token at login, and the
+     * session syncer resets it on every inbound message, then sets it only from a token that verified. With tokens
+     * required (production since 2026-09-23), every signed-in caller has one; it is null only for a caller with no
+     * identity, whose claim can earn nothing but public operations, and for states the server builds itself (the
+     * authorization push after a login, built from the stored session before the new token has come back).
+     */
+    public static boolean isEffectivelyBackoffice(Object state) {
+        Boolean verified = getVerifiedBackoffice(state);
+        return verified != null ? verified : Boolean.TRUE.equals(getBackoffice(state));
+    }
+
+    /**
      * The network address this call came from — stamped by the SockJS bridge, never by a caller.
      *
      * <p>Trustworthy for the same reason as {@link #isClientOrigin}: the bridge sets it on every inbound frame and

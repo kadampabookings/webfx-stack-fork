@@ -68,7 +68,9 @@ public abstract class AuthorizationServerServiceProviderBase implements Authoriz
         // Everything the answer depends on is read HERE, on the calling thread, while the request's
         // state is still in place. Past the compose() below there is no principal to read.
         Object userId = normalisedPrincipal(ThreadLocalStateHolder.getUserId());
-        boolean backoffice = ThreadLocalStateHolder.isBackoffice();
+        // The verified audience, not the client's claim: a front-office session claiming the back office would
+        // otherwise be judged by back-office grants (StateAccessor.isEffectivelyBackoffice, 2026-10-22).
+        boolean backoffice = ThreadLocalStateHolder.isEffectivelyBackoffice();
         Map<String, String> context = contextOf(operationAuthorizationRequest);
         return getOrCreateRuleRegistry(userId, backoffice)
             .map(registry -> registry.doesRulesAuthorize(operationAuthorizationRequest, context))
