@@ -297,8 +297,18 @@ final class VertxHttpRouterConfigurator {
      * <p><b>An unresolved value is dropped, not served.</b> These URLs come from configuration and are
      * typically written as a substitution; if the variable behind one is unset, the config carries the
      * placeholder text itself. Publishing {@code "enroll": "${{ SOMETHING }}/profile"} would be worse
-     * than publishing nothing — a manager would send people to a URL that cannot exist. Returning null
-     * when nothing resolves leaves the path 404ing, which is what it does today and is a valid answer.
+     * than publishing nothing — a manager would send people to a URL that cannot exist.
+     *
+     * <p><b>An empty document and no document are different answers, and the difference is the config
+     * key.</b> The spec: "An empty JSON object CAN be returned to signal support for passkeys, but not
+     * advertise specific endpoints." So {@code {}} says "passkeys work here, there is no page to send
+     * you to", while a 404 says nothing at all. The key being ABSENT returns null and leaves the path
+     * 404ing; the key being PRESENT always yields a document, {@code {}} if no member survives. That
+     * is what KBS publishes as of 2026-10-23: passkeys are enrolled and managed in the back office
+     * only, deliberately, so there is no page a member's password manager could usefully open — but
+     * the credential they already hold does work here, and {@code {}} is how you say exactly that.
+     * It also means a misconfiguration degrades to {@code {}} rather than to a bad URL; the boot log
+     * prints the body, so an unexpected {@code {}} is visible there.
      *
      * <p>Built by hand rather than through an AST writer so that this plugin needs no JSON dependency it
      * does not already have. Three known keys and URL values, each escaped.
@@ -314,7 +324,7 @@ final class VertxHttpRouterConfigurator {
             body.append(body.length() == 0 ? "{" : ",")
                 .append("\"").append(member).append("\":\"").append(escapeJson(url)).append("\"");
         }
-        return body.length() == 0 ? null : body.append("}").toString();
+        return body.length() == 0 ? "{}" : body.append("}").toString();
     }
 
     /** Minimal JSON string escaping — these are URLs, but a configuration file can hold anything. */
