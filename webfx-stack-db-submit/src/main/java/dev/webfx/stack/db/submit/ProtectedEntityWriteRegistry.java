@@ -88,19 +88,19 @@ public final class ProtectedEntityWriteRegistry {
         Map<String, Object> writtenValues,
         Object targetId,
         boolean unbounded,
-        String[] batchInserts
+        WriteRequest[] batchWrites
     ) {
 
-        // NO SECOND CONSTRUCTOR. A convenience overload defaulting batchInserts to null would save the
+        // NO SECOND CONSTRUCTOR. A convenience overload defaulting batchWrites to null would save the
         // callers a `null` each, and it crashes the GWT compiler while it computes permutations — this
         // module is compiled to JavaScript for both clients, and a record with more than one
         // constructor is a shape it cannot handle. The callers pass null explicitly instead, which also
         // makes "this write was judged outside a batch" something a reader sees at the call site.
 
         /** The same write, told what the batch around it inserts. */
-        public WriteRequest withBatchInserts(String[] batchInserts) {
-            return batchInserts == this.batchInserts ? this // the single-submit path, where both are null
-                : new WriteRequest(entityName, verb, writtenFields, writtenValues, targetId, unbounded, batchInserts);
+        public WriteRequest withBatchWrites(WriteRequest[] batchWrites) {
+            return batchWrites == this.batchWrites ? this // the single-submit path, where both are null
+                : new WriteRequest(entityName, verb, writtenFields, writtenValues, targetId, unbounded, batchWrites);
         }
 
         /**
@@ -118,7 +118,27 @@ public final class ProtectedEntityWriteRegistry {
          * batch that does not exist resolves to nothing.
          */
         public String batchInsertAt(int index) {
-            return batchInserts == null || index < 0 || index >= batchInserts.length ? null : batchInserts[index];
+            WriteRequest insert = batchWriteAt(index);
+            return insert == null ? null : insert.entityName();
+        }
+
+        /**
+         * The whole write at statement {@code index} of the enclosing batch, under the same conditions and with
+         * the same meaning for null as {@link #batchInsertAt}, which is derived from it.
+         *
+         * <p>The name alone answers "what kind of row is this reference pointing at". It cannot answer <b>where
+         * that row will live</b>, and a rule that places a write has to: a booking is written as one batch, so a
+         * line and its attendances reference a document that has no id yet, and following the reference to a
+         * name leaves them in no context at all — where no organization-scoped grant can ever satisfy them.
+         * The written values of the statement being pointed at are what resolve it, so the request carries them
+         * rather than being re-read; the entity name is still what most rules want, so it keeps its own method.
+         *
+         * <p>The returned request does NOT itself carry the batch: the array holds the writes as they were
+         * inspected, so there is no cycle to walk into, and a caller following a chain of references passes the
+         * batch down itself (and bounds how far it will go — the batch is the caller's to compose).
+         */
+        public WriteRequest batchWriteAt(int index) {
+            return batchWrites == null || index < 0 || index >= batchWrites.length ? null : batchWrites[index];
         }
     }
 

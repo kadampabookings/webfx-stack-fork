@@ -159,7 +159,7 @@ public final class ClientSubmitGuard {
 
     /** Succeeds when this client write may run; fails with the refusal otherwise. Call on the caller's thread. */
     public static Future<Void> check(SubmitArgument argument) {
-        // No batch, so no statement for a generated-key reference to name: batchInserts stays null and a
+        // No batch, so no statement for a generated-key reference to name: batchWrites stays null and a
         // rule that requires one refuses, which is what a reference resolving to nothing deserves.
         return decide(argument, false, null, null);
     }
@@ -181,7 +181,7 @@ public final class ClientSubmitGuard {
         // Separate from the array above, because an inspector may legitimately return null: without this, such a
         // statement would be parsed again by decide() rather than being known to have been read already.
         boolean[] inspected = new boolean[arguments.length];
-        String[] inserts = new String[arguments.length];
+        ProtectedEntityWriteRegistry.WriteRequest[] inserts = new ProtectedEntityWriteRegistry.WriteRequest[arguments.length];
         Inspector i = inspector;
         for (int index = 0; index < arguments.length; index++) {
             SubmitArgument argument = arguments[index];
@@ -191,9 +191,11 @@ public final class ClientSubmitGuard {
             inspected[index] = true;
             Inspection inspection = inspections[index] = safeInspect(i, argument);
             ProtectedEntityWriteRegistry.WriteRequest write = inspection == null ? null : inspection.write();
-            // Every row of a grouped statement inserts the same entity, so the first row names it for all of them.
+            // Every row of a grouped statement inserts the same entity, so the first row names it for all of
+            // them. The whole write is kept, not just the name: a rule placing a row whose parent this batch is
+            // creating needs the parent's own written values (see WriteRequest.batchWriteAt).
             if (write != null && write.verb() == ProtectedEntityWriteRegistry.WriteVerb.INSERT)
-                inserts[index] = write.entityName();
+                inserts[index] = write;
         }
         List<Future<Void>> decisions = new ArrayList<>();
         for (int index = 0; index < arguments.length; index++)
@@ -212,7 +214,8 @@ public final class ClientSubmitGuard {
     }
 
     private static Future<Void> decide(SubmitArgument argument, boolean alreadyInspected,
-                                       Inspection precomputed, String[] batchInserts) {
+                                       Inspection precomputed,
+                                       ProtectedEntityWriteRegistry.WriteRequest[] batchWrites) {
         if (argument == null)
             return refused(null, UNCHECKABLE_REFUSED);
         if (isIgnoredPreamble(argument))
@@ -245,7 +248,7 @@ public final class ClientSubmitGuard {
             return Future.succeededFuture();
         List<Future<Void>> answers = new ArrayList<>();
         for (ProtectedEntityWriteRegistry.WriteRequest write : writes)
-            answers.add(ask(argument, policy, write.withBatchInserts(batchInserts)));
+            answers.add(ask(argument, policy, write.withBatchWrites(batchWrites)));
         return Future.all(new ArrayList<>(answers)).map(ignored -> null);
     }
 
