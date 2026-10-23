@@ -1,8 +1,10 @@
 package dev.webfx.stack.http.server.vertx;
 
 import dev.webfx.platform.ast.ReadOnlyAstArray;
+import dev.webfx.platform.ast.ReadOnlyAstObject;
 import dev.webfx.platform.boot.ApplicationReadiness;
 import dev.webfx.platform.console.Console;
+import dev.webfx.platform.substitution.Substitutor;
 import dev.webfx.platform.util.vertx.VertxInstance;
 import io.vertx.core.Vertx;
 import io.vertx.core.http.HttpClient;
@@ -279,6 +281,76 @@ final class VertxHttpRouterConfigurator {
         EXTRACTED_ARCHIVED_FOLDERS.put(archiveWithInternalPath, extractedPath);
 
         return extractedPath;
+    }
+
+    /** The members the passkey-endpoints document may carry, in the order the spec lists them. */
+    private static final String[] PASSKEY_ENDPOINT_MEMBERS = { "enroll", "manage", "prfUsageDetails" };
+
+    /**
+     * The passkey-endpoints document for this configuration, or null when there is nothing to say.
+     *
+     * <p>W3C "A Well-Known URL for Relying Party Passkey Endpoints": a JSON object whose optional
+     * {@code enroll}, {@code manage} and {@code prfUsageDetails} members are URLs to the pages where a
+     * person creates and manages their passkeys. Password managers fetch it so they can offer "manage
+     * your passkeys for this site" as a link rather than leaving the user to hunt through settings.
+     *
+     * <p><b>An unresolved value is dropped, not served.</b> These URLs come from configuration and are
+     * typically written as a substitution; if the variable behind one is unset, the config carries the
+     * placeholder text itself. Publishing {@code "enroll": "${{ SOMETHING }}/profile"} would be worse
+     * than publishing nothing — a manager would send people to a URL that cannot exist. Returning null
+     * when nothing resolves leaves the path 404ing, which is what it does today and is a valid answer.
+     *
+     * <p>Built by hand rather than through an AST writer so that this plugin needs no JSON dependency it
+     * does not already have. Three known keys and URL values, each escaped.
+     */
+    static String passkeyEndpointsBody(ReadOnlyAstObject config) {
+        if (config == null)
+            return null;
+        StringBuilder body = new StringBuilder();
+        for (String member : PASSKEY_ENDPOINT_MEMBERS) {
+            String url = config.getString(member);
+            if (url == null || url.isBlank() || !Substitutor.areValuesNonNullAndResolved(url))
+                continue;
+            body.append(body.length() == 0 ? "{" : ",")
+                .append("\"").append(member).append("\":\"").append(escapeJson(url)).append("\"");
+        }
+        return body.length() == 0 ? null : body.append("}").toString();
+    }
+
+    /** Minimal JSON string escaping — these are URLs, but a configuration file can hold anything. */
+    private static String escapeJson(String value) {
+        StringBuilder escaped = new StringBuilder(value.length());
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            switch (c) {
+                case '"':  escaped.append("\\\""); break;
+                case '\\': escaped.append("\\\\"); break;
+                case '\n': escaped.append("\\n"); break;
+                case '\r': escaped.append("\\r"); break;
+                case '\t': escaped.append("\\t"); break;
+                default:
+                    if (c < 0x20)
+                        escaped.append(String.format("\\u%04x", (int) c));
+                    else
+                        escaped.append(c);
+            }
+        }
+        return escaped.toString();
+    }
+
+    /**
+     * Serves the passkey-endpoints document at its well-known path.
+     *
+     * <p>200 and {@code application/json}, and NO redirect — the spec requires all three, so this is an
+     * exact route rather than anything the SPA fallback could answer. The fallback would 404 it anyway:
+     * the path's first segment starts with a dot. A route registered here matches first.
+     */
+    static void addPasskeyEndpointsRoute(String body) {
+        VertxInstance.getHttpRouter()
+            .route(HttpMethod.GET, "/.well-known/passkey-endpoints")
+            .handler(routingContext -> routingContext.response()
+                .putHeader("Content-Type", "application/json")
+                .end(body));
     }
 
     /** Our own namespaces: a request here is an endpoint call, and a typo in one must fail as one. */
