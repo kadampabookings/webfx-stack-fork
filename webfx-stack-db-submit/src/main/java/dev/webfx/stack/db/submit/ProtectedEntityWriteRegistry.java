@@ -80,6 +80,13 @@ public final class ProtectedEntityWriteRegistry {
      *                      <p><b>Bounded is not safe.</b> {@code where removed = $1} is bounded by this
      *                      and can still match nearly every row. It is a floor under the statement that
      *                      names no bound at all, not an answer to whose rows these are.
+     * @param batchWrites   the inspected write of each statement of the enclosing batch, null at a statement
+     *                      that inserts nothing and null entirely when this write was judged outside a batch.
+     *                      Read through {@link #batchInsertAt} or {@link #batchWriteAt} rather than directly.
+     *                      <p><b>Shared, and not copied.</b> A record does not copy an array component, so
+     *                      every write of the batch holds THIS array: a rule that sorted it, cleared an entry
+     *                      or wrote into it would change what every policy after it sees, and what the writes
+     *                      already judged were judged against. It is the batch's, not the rule's — read it.
      */
     public record WriteRequest(
         String entityName,
