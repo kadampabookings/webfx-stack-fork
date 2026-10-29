@@ -6,6 +6,7 @@ import dev.webfx.stack.db.query.ClientQueryGuard;
 import dev.webfx.stack.db.query.ClientReadDenyList;
 import dev.webfx.stack.db.query.ClientReadInspectionRegistry;
 import dev.webfx.stack.db.query.ClientReadInspectionRegistry.ReadShape;
+import dev.webfx.stack.db.query.ProtectedEntityReadRegistry;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.orm.datasourcemodel.service.DataSourceModelService;
 import dev.webfx.stack.orm.domainmodel.DataSourceModel;
@@ -82,7 +83,77 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
         }
         if (inspecting)
             describe(argument);
-        return decide(argument);
+        String refusal = decide(argument);
+        if (refusal != null)
+            return refusal;
+        return enforceReadPolicy(argument);
+    }
+
+    /**
+     * Asks the application's read policy, when one is registered — step 3 of the read-authorization plan.
+     *
+     * <p>Deliberately AFTER {@link #decide}: the deny list is about columns nobody may read and answers
+     * without a caller, so it stays the cheaper and blunter gate in front.
+     *
+     * <p><b>Independent of whether anyone is watching.</b> The shape is computed through the same cached
+     * {@link #shapeFor} the description uses, rather than inside {@link #describe}, so that enforcing a policy
+     * never depends on an inspector being registered. Tying the two together would have made a control come
+     * and go with an observer.
+     *
+     * <p><b>Fails closed, and only once something is declared.</b> A statement that cannot be shaped cannot be
+     * judged, so with a policy registered it is refused rather than run — the same rule
+     * {@code ClientSubmitGuard} states for writes. With no policy registered nothing is declared, there is
+     * nothing to enforce, and an unshapeable statement runs as it always has.
+     */
+    private String enforceReadPolicy(QueryArgument argument) {
+        if (!ProtectedEntityReadRegistry.hasPolicy())
+            return null;
+        ReadShape shape;
+        try {
+            shape = shapeFor(argument);
+        } catch (Throwable shapingFailed) {
+            // Unlike the description, this one must NOT be swallowed: a shaping failure here is a statement
+            // nobody checked, and a policy has been declared.
+            return ClientQueryGuard.UNCHECKABLE_REFUSED;
+        }
+        if (shape == null || shape == UNDESCRIBABLE)
+            return ClientQueryGuard.UNCHECKABLE_REFUSED;
+        return ProtectedEntityReadRegistry.refusalReason(new ProtectedEntityReadRegistry.ReadRequest(
+            shape.entityName(), shape.touchedTables(), shape.boundFields(), shape.bounded(), shape.hasWhere()));
+    }
+
+    /**
+     * This statement's shape, computed once and cached by text, for both the description and the enforcement.
+     *
+     * <p>Returns {@link #UNDESCRIBABLE} when there is nothing to shape — no statement, no local data source —
+     * and otherwise whatever the shaper made of it. It throws what the shaper throws: the description swallows
+     * that and carries on, the enforcement refuses. Keeping the two reactions at the call sites is the point
+     * of lifting this out of {@code describe}.
+     */
+    private ReadShape shapeFor(QueryArgument argument) {
+        String statement = argument.getStatement();
+        Object dataSourceId = argument.getDataSourceId();
+        if (statement == null || !LocalDataSourceService.isInitialised()
+            || !LocalDataSourceService.isDataSourceLocal(dataSourceId))
+            return UNDESCRIBABLE;
+        boolean compileExpressions = !argument.isHasDqlRuntime();
+        String key = compileExpressions + "|" + statement;
+        ReadShape shape;
+        synchronized (shapes) {
+            shape = shapes.get(key);
+        }
+        if (shape == null) {
+            shape = DqlClientReadShaper.shapeOf(
+                DataSourceModelService.getDataSourceModel(dataSourceId), statement, compileExpressions);
+            if (shape == null)
+                shape = UNDESCRIBABLE;
+            synchronized (shapes) {
+                if (shapes.size() >= MAX_SHAPES)
+                    shapes.clear(); // crude, but bounded; a statement costs one extra compile to re-earn
+                shapes.put(key, shape);
+            }
+        }
+        return shape;
     }
 
     /**
@@ -96,32 +167,9 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
      */
     private void describe(QueryArgument argument) {
         try {
-            String statement = argument.getStatement();
-            Object dataSourceId = argument.getDataSourceId();
-            if (statement == null || !LocalDataSourceService.isInitialised()
-                || !LocalDataSourceService.isDataSourceLocal(dataSourceId)) {
-                ClientReadInspectionRegistry.notifyUndescribableStatement(statement);
-                return;
-            }
-            boolean compileExpressions = !argument.isHasDqlRuntime();
-            String key = compileExpressions + "|" + statement;
-            ReadShape shape;
-            synchronized (shapes) {
-                shape = shapes.get(key);
-            }
-            if (shape == null) {
-                shape = DqlClientReadShaper.shapeOf(
-                    DataSourceModelService.getDataSourceModel(dataSourceId), statement, compileExpressions);
-                if (shape == null)
-                    shape = UNDESCRIBABLE;
-                synchronized (shapes) {
-                    if (shapes.size() >= MAX_SHAPES)
-                        shapes.clear(); // crude, but bounded; a statement costs one extra compile to re-earn
-                    shapes.put(key, shape);
-                }
-            }
+            ReadShape shape = shapeFor(argument);
             if (shape == UNDESCRIBABLE)
-                ClientReadInspectionRegistry.notifyUndescribableStatement(statement);
+                ClientReadInspectionRegistry.notifyUndescribableStatement(argument.getStatement());
             else
                 ClientReadInspectionRegistry.notifyRead(shape);
         } catch (Throwable ignored) {
