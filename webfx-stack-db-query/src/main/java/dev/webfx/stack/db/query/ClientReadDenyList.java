@@ -37,6 +37,8 @@ public final class ClientReadDenyList {
     private static volatile Set<String> capabilityColumns = Collections.emptySet();
     /** "table.column", lower-cased — WATCHED, never refused. See observeColumnExceptEqualityMatch. */
     private static volatile Set<String> observedCapabilityColumns = Collections.emptySet();
+    /** "table.column", lower-cased — WATCHED flat, never refused and with no equality exception. See observeColumn. */
+    private static volatile Set<String> observedColumns = Collections.emptySet();
     /** Bumped on every change, so anything that caches a verdict can tell when it went stale. */
     private static volatile int version;
 
@@ -138,6 +140,9 @@ public final class ClientReadDenyList {
         if (isCapabilityColumn(sqlTableName, sqlColumnName) || isColumnDenied(sqlTableName, sqlColumnName))
             throw new IllegalStateException(
                 "A column already denied to clients cannot also be merely observed: " + sqlTableName);
+        if (isObservedColumn(sqlTableName, sqlColumnName))
+            throw new IllegalStateException(
+                "A column cannot be watched both flat and as a capability token: " + sqlTableName);
         Set<String> next = new HashSet<>(observedCapabilityColumns);
         if (next.add(normalise(sqlTableName) + "." + normalise(sqlColumnName))) {
             observedCapabilityColumns = Collections.unmodifiableSet(next);
@@ -153,7 +158,52 @@ public final class ClientReadDenyList {
 
     /** True when nothing is being watched, so the observation pass has nothing to look for and is skipped. */
     public static boolean hasNoObservedColumns() {
-        return observedCapabilityColumns.isEmpty();
+        return observedCapabilityColumns.isEmpty() && observedColumns.isEmpty();
+    }
+
+    /**
+     * Watches a column that will be denied FLAT — reported when a client reads it, and served.
+     *
+     * <p>The twin of {@link #observeColumnExceptEqualityMatch}, for the other kind of secret. That one is for a
+     * capability token, where looking a row up BY the value is the legitimate use and only READING it is the
+     * leak, so its watch reports everything the equality walk cannot account for. This one is for a secret with
+     * no legitimate use from a client at all — an API key, where an equality test would itself be a
+     * per-character oracle — so every appearance is a read and there is nothing to except.
+     *
+     * <h3>Why it exists, which is a gap found by falling into it</h3>
+     *
+     * <p>{@code invitation.token} was restored on evidence: paused, watched, and denied again once the count had
+     * been zero for a day. {@code organization.bunny_api_key} was denied on 2026-10-30 with no evidence at all,
+     * because a flat-denied column had no watch — the list could deny it or say nothing, and the only way to
+     * find out whether a client still read it was to deny it and wait for a complaint. That is the guess dressed
+     * as a date the capability watch was written to avoid, and it applied just as much here.
+     *
+     * <p><b>Counted separately from the capability watch, and that is not tidiness.</b> The enforcing walk
+     * reconciles a hit count against the equality tests it can point at, so a flat hit mixed into that count
+     * would be read as an unaccounted-for capability read — or worse, excused by an equality test somewhere
+     * else in the same statement. Different question, different tally.
+     */
+    public static synchronized void observeColumn(String sqlTableName, String sqlColumnName) {
+        // Same boot-time guard as the capability watch, for the same reason: the enforced rule already refuses
+        // and logs, so an observation beside it reports a read that never happened. This is the error that
+        // aborted a deploy on 2026-10-30 when a restored deny was left beside its watch.
+        if (isColumnDenied(sqlTableName, sqlColumnName))
+            throw new IllegalStateException(
+                "A column already denied to clients cannot also be merely observed: " + sqlTableName);
+        if (isObservedCapabilityColumn(sqlTableName, sqlColumnName))
+            throw new IllegalStateException(
+                "A column cannot be watched both flat and as a capability token: " + sqlTableName);
+        Set<String> next = new HashSet<>(observedColumns);
+        if (next.add(normalise(sqlTableName) + "." + normalise(sqlColumnName))) {
+            observedColumns = Collections.unmodifiableSet(next);
+            version++;
+        }
+    }
+
+    /** Whether this column is being WATCHED flat — reported on any read, never refused, no equality exception. */
+    public static boolean isObservedColumn(String sqlTableName, String sqlColumnName) {
+        return sqlTableName != null && sqlColumnName != null
+               && observedColumns.contains(normalise(sqlTableName) + "." + normalise(sqlColumnName));
     }
 
     /** Denies one column to client queries, leaving the rest of its table readable. */

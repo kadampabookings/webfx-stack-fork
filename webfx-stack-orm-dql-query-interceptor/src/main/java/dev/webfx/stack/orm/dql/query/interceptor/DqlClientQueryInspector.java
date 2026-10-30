@@ -213,6 +213,12 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
         } catch (RuntimeException e) {
             return; // does not parse or compile: the enforcing pass refuses it, and there is nothing to describe
         }
+        // Flat watches first, and WITHOUT the walk: every appearance of such a column is a read, so there is
+        // nothing to reconcile and no construct that could excuse one. Reported even when the capability tally
+        // below is empty, which is the usual case — the two watches answer different questions.
+        if (!watcher.flatWatchedColumnsReached().isEmpty())
+            ClientReadInspectionRegistry.notifyObservedColumnRead(
+                statement, watcher.flatWatchedColumnsReached().toArray(new String[0]));
         int hits = watcher.capabilityColumnHits();
         if (hits == 0)
             return;

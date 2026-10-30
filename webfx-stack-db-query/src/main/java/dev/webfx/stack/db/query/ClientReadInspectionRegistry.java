@@ -118,6 +118,12 @@ public final class ClientReadInspectionRegistry {
     public interface ReadInspector {
 
         /**
+         * A client read a flat-watched column. Default does nothing, so an inspector written before flat
+         * watches existed keeps compiling and simply reports nothing about them.
+         */
+        default void onObservedColumnRead(String statement, String[] columns) {}
+
+        /**
          * Asked before the statement is parsed: is this caller's read one you want reported?
          *
          * <p>Called on the caller's own thread, before any async hop, so an implementation may read
@@ -209,6 +215,25 @@ public final class ClientReadInspectionRegistry {
                 currentInspector.onObservedCapabilityColumnRead(
                     statement == null ? "(none)" : ClientQueryGuard.maskLiterals(statement), columns, unanalysable);
             } catch (Throwable ignored) {
+            }
+        }
+    }
+
+    /**
+     * Told that a client read a FLAT-watched column — one that will be denied outright, with no equality use.
+     *
+     * <p>Unlike {@link #notifyObservedCapabilityColumnRead} there is no {@code unanalysable} here, and the
+     * absence is the point: that flag exists because the capability walk can meet a construct it cannot read,
+     * and "I could not tell" must not be counted as "a read". A flat column needs no walk — the compiler asked
+     * for it, which IS the read — so there is no third answer to report.
+     */
+    public static void notifyObservedColumnRead(String statement, String[] columns) {
+        ReadInspector currentInspector = inspector;
+        if (currentInspector != null) {
+            try {
+                currentInspector.onObservedColumnRead(statement, columns);
+            } catch (Throwable ignored) {
+                // Watching a query must never be able to fail one.
             }
         }
     }

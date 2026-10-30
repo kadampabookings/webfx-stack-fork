@@ -58,6 +58,15 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
      */
     private final boolean watchOnly;
     private final Set<String> watchedColumnsReached = new LinkedHashSet<>();
+    /**
+     * Flat-watched columns this statement reached — see {@code ClientReadDenyList.observeColumn}.
+     *
+     * <p>Kept APART from {@link #watchedColumnsReached} and counted in no tally of its own, because the walk
+     * that reconciles capability hits against equality tests must never see these: a flat column has no
+     * legitimate equality use, so an equality test elsewhere in the statement could otherwise excuse a read of
+     * it. Every entry here is a read, full stop, and the inspector reports them without consulting the walk.
+     */
+    private final Set<String> flatWatchedColumnsReached = new LinkedHashSet<>();
 
     DenyingCompilerDomainModelReader(CompilerDomainModelReader delegate) {
         this(delegate, false);
@@ -66,6 +75,11 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
     DenyingCompilerDomainModelReader(CompilerDomainModelReader delegate, boolean watchOnly) {
         this.delegate = delegate;
         this.watchOnly = watchOnly;
+    }
+
+    /** Flat-watched columns reached, each once. Every one is a read; there is nothing to reconcile. */
+    Set<String> flatWatchedColumnsReached() {
+        return flatWatchedColumnsReached;
     }
 
     int capabilityColumnHits() {
@@ -92,6 +106,8 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
             if (ClientReadDenyList.isObservedCapabilityColumn(table, column)) {
                 capabilityColumnHits++;
                 watchedColumnsReached.add(table + "." + column);
+            } else if (ClientReadDenyList.isObservedColumn(table, column)) {
+                flatWatchedColumnsReached.add(table + "." + column);
             }
             return column;
         }
@@ -110,6 +126,8 @@ final class DenyingCompilerDomainModelReader implements CompilerDomainModelReade
             if (ClientReadDenyList.isObservedCapabilityColumn(table, column)) {
                 capabilityColumnHits++;
                 watchedColumnsReached.add(table + "." + column);
+            } else if (ClientReadDenyList.isObservedColumn(table, column)) {
+                flatWatchedColumnsReached.add(table + "." + column);
             }
             return column;
         }
