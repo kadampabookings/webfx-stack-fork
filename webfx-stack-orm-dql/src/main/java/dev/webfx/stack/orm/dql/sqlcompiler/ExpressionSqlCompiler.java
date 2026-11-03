@@ -418,7 +418,14 @@ public final class ExpressionSqlCompiler {
             sqlBuild.setScopeRow(dqlStatement.getDomainClass(), sqlBuild.getClassAlias(dqlStatement.getDomainClass(), modelReader));
             sqlBuild.setCompilingScopeCondition(true);
             try {
-                compileExpression(scopeCondition, new Options(sqlBuild, SqlClause.WHERE, " and ", grouped, false, false, modelReader));
+                // Parenthesised, exactly as SqlBuild does for a join's predicate: a rule with a top-level
+                // `or` appended bare regroups the caller's own where clause, since `<filter> and A or B` is
+                // read as `(<filter> and A) or B` - which returns rows the caller's own filter excluded.
+                // Unconditional rather than "only when the rule needs it": the join point parenthesises
+                // unconditionally too, and a rule that grows a second arm later must not depend on someone
+                // noticing that it now does.
+                String scopeSql = sqlBuild.compileToScratchSqlText(scopeCondition, modelReader);
+                sqlBuild.prepareAppend(SqlClause.WHERE, " and ").append('(').append(scopeSql).append(')');
             } finally {
                 sqlBuild.setCompilingScopeCondition(wasCompilingScopeCondition);
                 sqlBuild.setScopeRow(previousScopeRowClass, previousScopeRowAlias);
