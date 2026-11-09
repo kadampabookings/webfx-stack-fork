@@ -20,6 +20,7 @@ public final class SessionAccessor {
     private final static String CLIENT_PROFILE_ATTRIBUE_NAME = "clientProfile"; // Server-side: compact "browser|os|deviceType" profile, sent once at connection
     private final static String SERVER_SESSION_ID_SYNCED_ATTRIBUE_NAME = "serverSessionIdSynced"; // Used only on the server side to store the info if the client knows the sessionId
     private final static String SESSION_FAMILY_ID_ATTRIBUE_NAME = "sessionFamilyId"; // Server-side: the family of the last token this server verified for this session
+    private final static String VERIFIED_BACKOFFICE_ATTRIBUE_NAME = "verifiedBackoffice"; // Server-side: the audience of the last token this server verified for this session
 
 
     public static String getServerSessionId(Session session) {
@@ -77,6 +78,25 @@ public final class SessionAccessor {
 
     public static boolean changeBackoffice(Session session, Boolean backoffice, boolean skipNullValue) {
         return changeSessionAttribute(session, BACKOFFICE_ATTRIBUE_NAME, backoffice, skipNullValue);
+    }
+
+    /**
+     * Whether this session's last message carried a back-office token whose signature held — the VERIFIED
+     * audience, as opposed to {@link #isBackoffice}, which is only what the client says it is. Server-side; read
+     * by the bridge, which judges messages that carry no state of their own (client-to-client broadcasts).
+     */
+    public static boolean isVerifiedBackoffice(Session session) {
+        return session != null && Boolean.TRUE.equals(session.get(VERIFIED_BACKOFFICE_ATTRIBUE_NAME));
+    }
+
+    /**
+     * Records the audience the last message proved. Not skip-null, unlike its neighbours: a message whose token
+     * did not verify — expired, revoked, logged out, absent — must take the right away rather than leave the
+     * previous value standing.
+     */
+    public static boolean changeVerifiedBackoffice(Session session, Boolean verifiedBackoffice) {
+        return changeSessionAttribute(session, VERIFIED_BACKOFFICE_ATTRIBUE_NAME,
+            Boolean.TRUE.equals(verifiedBackoffice) ? Boolean.TRUE : null, false);
     }
 
     public static String getClientVersion(Session session) {

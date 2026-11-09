@@ -102,7 +102,15 @@ public final class ServerSideStateSessionSyncer {
         // The identity is settled BEFORE anything below reads the userId, and it is the one step here that can
         // need a database round trip — see applyIdentityToken for when, which is rarely.
         return applyIdentityToken(clientState, serverSession)
-            .compose(ignored -> syncFixedServerSessionFromCheckedIncomingClientState(serverSession, clientState, forceStore));
+            .compose(ignored -> {
+                // The audience this message proved, kept on the connection for the bridge: client-to-client
+                // broadcasts carry no state of their own, so the bridge judges them on what the connection's last
+                // message proved (see BridgeAddressPolicy). Every message, not only changes, and cleared when the
+                // token did not verify — applyIdentityToken leaves the attribute null on every such path. Not
+                // stored: it is about this connection, and a new connection proves itself again.
+                SessionAccessor.changeVerifiedBackoffice(serverSession, StateAccessor.getVerifiedBackoffice(clientState));
+                return syncFixedServerSessionFromCheckedIncomingClientState(serverSession, clientState, forceStore);
+            });
     }
 
     private static Future<IsolatedSession> syncFixedServerSessionFromCheckedIncomingClientState(IsolatedSession serverSession, Object clientState, boolean forceStore) {
