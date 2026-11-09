@@ -3,6 +3,7 @@ package dev.webfx.stack.db.query.buscall;
 import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.call.spi.AsyncFunctionBusCallEndpoint;
 import dev.webfx.stack.db.query.ClientQueryGuard;
+import dev.webfx.stack.db.query.ClientScopeToken;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
@@ -23,7 +24,15 @@ public final class ExecuteQueryMethodEndpoint extends AsyncFunctionBusCallEndpoi
             // Resolved HERE because the principal is on this thread and will not be by the time the query is
             // bound — see ServerCallerParameters. Attached after the guard so a refused query never resolves
             // a caller, and before execution so the terms have values by the time they are compiled.
-            QueryArgument resolved = ServerCallerParameters.attach(arg);
+                // The data scope, resolved HERE for the same reason as the caller values, and at the same
+                // door: this endpoint is where a client's own statement arrives, and an endpoint's internal
+                // lookup never passes through it. It rides on the argument because a push re-fire has no
+                // thread state left to read it from, and it joins the argument's equality so two scopes
+                // never share one compiled statement or one subscription.
+            Object scopeToken = ClientScopeToken.forCaller();
+            QueryArgument scoped = scopeToken == null ? arg
+                : QueryArgument.builder().copy(arg).setScopeToken(scopeToken).build();
+            QueryArgument resolved = ServerCallerParameters.attach(scoped, scopeToken);
             return QueryService.executeQuery(resolved).map(result -> stripMetadataIfRequested(arg, result));
         });
     }

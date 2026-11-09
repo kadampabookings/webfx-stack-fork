@@ -4,6 +4,7 @@ import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.call.spi.AsyncFunctionBusCallEndpoint;
 import dev.webfx.platform.async.Batch;
 import dev.webfx.stack.db.query.ClientQueryGuard;
+import dev.webfx.stack.db.query.ClientScopeToken;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.QueryResult;
 import dev.webfx.stack.db.query.QueryService;
@@ -28,8 +29,13 @@ public final class ExecuteQueryBatchMethodEndpoint extends AsyncFunctionBusCallE
                 // Each element separately, and on THIS thread, for the reason the single-query endpoint
                 // gives: the principal is here and will not be where the values are bound. In place, since
                 // the array is the server's own copy of what arrived.
-                for (int i = 0; i < args.length; i++)
-                    args[i] = ServerCallerParameters.attach(args[i]);
+                // One scope for the whole batch: it is a property of the caller, not of a statement.
+                Object scopeToken = ClientScopeToken.forCaller();
+                for (int i = 0; i < args.length; i++) {
+                    QueryArgument scoped = scopeToken == null ? args[i]
+                        : QueryArgument.builder().copy(args[i]).setScopeToken(scopeToken).build();
+                    args[i] = ServerCallerParameters.attach(scoped, scopeToken);
+                }
             }
             return QueryService.executeQueryBatch(batch);
         });

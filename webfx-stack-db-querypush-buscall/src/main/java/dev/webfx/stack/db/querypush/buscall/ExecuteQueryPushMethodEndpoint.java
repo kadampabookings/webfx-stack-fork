@@ -3,6 +3,7 @@ package dev.webfx.stack.db.querypush.buscall;
 import dev.webfx.platform.async.Future;
 import dev.webfx.stack.com.bus.call.spi.AsyncFunctionBusCallEndpoint;
 import dev.webfx.stack.db.query.ClientQueryGuard;
+import dev.webfx.stack.db.query.ClientScopeToken;
 import dev.webfx.stack.db.query.QueryArgument;
 import dev.webfx.stack.db.query.ServerCallerParameters;
 import dev.webfx.stack.db.querypush.QueryPushArgument;
@@ -29,7 +30,12 @@ public final class ExecuteQueryPushMethodEndpoint extends AsyncFunctionBusCallEn
                 // A re-fire has no client message and therefore no caller, so the value has to be part of what
                 // the subscription stores — and it is, because it goes into the parameters, which is also what
                 // keys one subscription apart from another's.
-                QueryArgument resolved = ServerCallerParameters.attach(queryArgument);
+                // The scope is stored with the subscription for the same reason the caller values are: a
+                // re-fire has no caller on the thread, and QueryInfo re-runs the argument it was built from.
+                Object scopeToken = ClientScopeToken.forCaller();
+                QueryArgument scoped = scopeToken == null ? queryArgument
+                    : QueryArgument.builder().copy(queryArgument).setScopeToken(scopeToken).build();
+                QueryArgument resolved = ServerCallerParameters.attach(scoped, scopeToken);
                 if (resolved != arg.getQueryArgument())
                     arg = QueryPushArgument.builder().copy(arg).setQueryArgument(resolved).build();
             }

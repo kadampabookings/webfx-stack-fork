@@ -59,7 +59,10 @@ public class DqlQueryInterceptorInitializer implements ApplicationJob {
                 // Translating DQL to SQL
                 try {
                     boolean compileExpressions = !argument.isHasDqlRuntime();
-                    SqlCompiled sqlCompiled = dataSourceModel.parseAndCompileSelect(statement, compileExpressions); // May raise an exception on syntax error or unknown fields
+                    // Compiled under the caller's data scope, which the endpoint stamped on the argument.
+                    // Null for every server-origin read — an endpoint's own lookup never passed the endpoint
+                    // that sets it — so those compile exactly as they always have.
+                    SqlCompiled sqlCompiled = dataSourceModel.parseAndCompileSelect(statement, compileExpressions, argument.getScopeToken()); // May raise an exception on syntax error or unknown fields
                     String sqlStatement = sqlCompiled.getSql();
                     if (!statement.equals(sqlStatement)) { // happens when DQL has been translated to SQL
                         //Console.log("[DQL] DQL: " + statement + "\nSQL: " + sqlStatement + "\n[DQL] Mapping: " + sqlCompiled.getQueryMapping());
