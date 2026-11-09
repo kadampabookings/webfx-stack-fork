@@ -29,11 +29,11 @@ import dev.webfx.platform.service.SingleServiceProvider;
  * the scoped row contributes one local column and the subquery's table goes in its own {@code FROM} as
  * {@code tt1}, registering nothing on the outer build.
  *
- * <p><b>The last check is a known failure, and it is the reason to read this file.</b> It re-states the same
- * rule as a dot path and requires the compiler to refuse it. The compiler does not: it emits an {@code ON}
- * clause referencing an alias that a LATER join introduces, which Postgres rejects with
- * {@code missing FROM-clause entry}. So the navigation guard is not total, and a rule that navigates fails at
- * execution rather than being refused by name. It fails closed; it is still not what the guard promises.
+ * <p><b>The last check is the reason to read this file.</b> It re-states the same rule as a dot path and
+ * requires the compiler to refuse it. Writing it found that the compiler did not: the guard meant to refuse
+ * navigation tested a flag that could never be set, and an {@code ON} clause came out referencing an alias
+ * introduced by a later join. {@code SqlBuild} now counts the joins a scope predicate registers, and that
+ * check is what this case holds in place.
  *
  * <h3>The alternative this made unnecessary</h3>
  *
@@ -139,34 +139,37 @@ public class ChatReadScopeCheck {
               "select m.id, m.id from chat_message as m where m.conversation_id=$1"
             + " and (m.conversation_id in (select tt1.id from conversation as tt1 where tt1.event_id=any($2)))");
 
-        // ── THE BOUNDARY, AND IT LEAKS. Delete a subquery above, write the dot path it replaces, and the
-        // compiler does NOT refuse it — it emits SQL Postgres cannot run. The ON clause of the join to
-        // `message` references `j3`, and `j3` is the join that comes AFTER it:
+        // ── THE BOUNDARY. Delete a subquery above, write the dot path it replaces, and this is the
+        // refusal that comes back. It is also the case that found the hole it now covers.
+        //
+        // Until SqlBuild was fixed this did NOT refuse. compileJoinScopePredicate tested a re-entrancy flag
+        // that could not fire — the flag was set together with compilingScopeCondition, and the method's
+        // FIRST line returns null whenever that is set, so the nested registration left before the flag was
+        // read and the throw was unreachable. What came out instead was an ON clause referencing an alias
+        // introduced by a LATER join:
         //
         //   join message j2 on j2.id=r.message_id and (j3.viewer_person_id=$2)
         //   join conversation j3 on j3.id=j2.conversation_id
         //
-        // Verified against Postgres 2026-11-09 with the same shape and no real tables:
-        //   ERROR:  missing FROM-clause entry for table "j3"
+        // which Postgres rejects with `missing FROM-clause entry for table "j3"` (verified against the shape
+        // on 2026-11-09). It failed closed, but at execution with a syntax-shaped error rather than here
+        // with the cause named. The guard now counts the joins registered while the predicate compiles,
+        // because the nested registration never comes back through that method at all.
         //
-        // So compileJoinScopePredicate's refusal is NOT total. Its guard fires when compiling a condition
-        // for a joined table registers a FURTHER join while that registration is in progress; in this shape
-        // the join lands on the outer build instead and the predicate is emitted with a forward reference.
-        // It fails closed — the database rejects the statement, so nothing is disclosed — but it fails at
-        // execution with a syntax-shaped error rather than at compile time with the message that names the
-        // cause, which is exactly what the guard was written to avoid.
+        // Probed by deleting the guard: this check fails with exactly the SQL above, and passes with it.
         //
-        // THE EXPECTATION BELOW IS THE CORRECT BEHAVIOUR AND THIS CHECK FAILS UNTIL THE COMPILER DELIVERS
-        // IT, following the precedent the root-parenthesisation check set in ClientReadScopeCheck. Do not
-        // "fix" it by asserting the broken SQL: that blesses a rule shape nobody should be able to write.
-        // The fix belongs in SqlBuild — either refuse the forward reference the way a re-entrant one is
-        // refused, or register the navigated join before the predicate that reads it.
+        // WHAT IS STILL ASYMMETRIC, deliberately: the SELECT-ROOT injection point does not refuse a
+        // navigating condition, and does not need to — at the root the join is registered before the WHERE
+        // that reads it, so the SQL is valid AND the predicate is correct, including when the statement
+        // reaches the same entity by two different paths (the scope binds the path the rule named). So a
+        // navigating rule works everywhere it is read as a root and is refused the first time it is joined.
+        // That is a trap for whoever writes the next rule, and the reason to write subqueries by default.
         ClientReadScope.registerProvider((dc, token) ->
             isChatMessage(dc)
                 ? ExpressionParser.parseExpression("conversation.viewerPerson=CALLER_PERSON", dc, model())
                 : null);
 
-        checkRefused("a dot-path rule is refused once the entity is joined (KNOWN FAILURE, see above)",
+        checkRefused("a dot-path rule is refused once the entity is joined",
               "select id from ChatMessageReaction r where message.conversation=$1");
 
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");

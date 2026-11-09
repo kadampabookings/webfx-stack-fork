@@ -618,15 +618,26 @@ public final class SqlBuild {
         Expression<?> condition = dev.webfx.stack.orm.dql.sqlcompiler.ClientReadScope.conditionFor(table2DomainClass, getScopeToken());
         if (condition == null)
             return null;
-        if (compilingJoinScope)
-            // A scope predicate that navigates would register a join while we are registering one, which
-            // mutates the map being written and re-enters this method. Refused by name rather than left to
-            // fail as a concurrent modification: a scope condition is meant to be a local test on the entity
-            // it scopes - see the plan's note on keeping them cheap - and one that navigates needs a
-            // different mechanism, not a subtler version of this one.
-            throw new IllegalStateException("A data scope condition must not navigate to another entity:"
-                + " compiling one for a joined table registered a further join");
-        compilingJoinScope = true;
+        // A scope predicate that navigates registers a join while we are registering one. It is refused by
+        // name: a scope condition is meant to be a local test on the entity it scopes - see the plan's note
+        // on keeping them cheap - and one that navigates needs a different mechanism, not a subtler version
+        // of this one. The join count is taken here and compared after the predicate compiles, BELOW.
+        //
+        // This replaces a re-entrancy flag that could not fire. It tested a `compilingJoinScope` field, but
+        // that field was set together with compilingScopeCondition, and the FIRST line of this method
+        // returns null whenever compilingScopeCondition is set - so the nested call left before the flag was
+        // ever consulted, and the throw was unreachable. What actually happened instead: the navigated join
+        // was appended AFTER the join whose ON clause referenced it, producing
+        //     join message j2 on j2.id=r.message_id and (j4.viewer_person_id=$3)
+        //     join conversation j4 on j4.id=j2.conversation_id
+        // which Postgres rejects with `missing FROM-clause entry for table "j4"`. Fails closed, but at
+        // execution with a syntax-shaped error instead of here, with the cause named - exactly what this
+        // guard exists to prevent. Found by ChatReadScopeCheck's last case.
+        //
+        // Counted rather than detected by re-entry because the nested registration does not come back
+        // through this method at all; the join map growing is the only evidence that the predicate left the
+        // row it was supposed to test.
+        int joinCountBefore = countJoins();
         Object previousClass = getCompilingClass();
         String previousAlias = getCompilingTableAlias();
         Object previousScopeRowClass = getScopeRowDomainClass();
@@ -645,17 +656,29 @@ public final class SqlBuild {
             // VALUES precisely because addColumnInClause strips the table alias in insert/values/update,
             // which silently produced an UNQUALIFIED column here — a scope condition that reads as the
             // outer table's column, which either fails to compile or, worse, does not.
-            return compileToScratchSqlText(condition, modelReader);
+            String predicateSql = compileToScratchSqlText(condition, modelReader);
+            // A subquery in the condition builds its own SqlBuild, so its tables do not land here; only a
+            // dot path on the scoped entity does. See the javadoc above for the SQL this used to emit.
+            if (countJoins() != joinCountBefore)
+                throw new IllegalStateException("A data scope condition must not navigate to another entity:"
+                    + " compiling one for a joined table registered a further join. Express the hop as a"
+                    + " subquery instead, so the scoped row contributes one local column.");
+            return predicateSql;
         } finally {
             setCompilingScopeCondition(wasCompilingScopeCondition);
             setScopeRow(previousScopeRowClass, previousScopeRowAlias);
             setCompilingClass(previousClass);
             setCompilingTableAlias(previousAlias);
-            compilingJoinScope = false;
         }
     }
 
-    private boolean compilingJoinScope;
+    /** Joins registered on THIS build, across every table alias. No streams: this compiles to JavaScript. */
+    private int countJoins() {
+        int count = 0;
+        for (Map<Join, Join> tableJoins : joins.values())
+            count += tableJoins.size();
+        return count;
+    }
 
     private static final class Join {
         // Join identifying fields (to include in equals and hash)
