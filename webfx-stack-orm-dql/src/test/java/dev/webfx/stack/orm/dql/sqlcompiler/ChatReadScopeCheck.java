@@ -158,16 +158,20 @@ public class ChatReadScopeCheck {
         //
         // Probed by deleting the guard: this check fails with exactly the SQL above, and passes with it.
         //
-        // WHAT IS STILL ASYMMETRIC, deliberately: the SELECT-ROOT injection point does not refuse a
-        // navigating condition, and does not need to — at the root the join is registered before the WHERE
-        // that reads it, so the SQL is valid AND the predicate is correct, including when the statement
-        // reaches the same entity by two different paths (the scope binds the path the rule named). So a
-        // navigating rule works everywhere it is read as a root and is refused the first time it is joined.
-        // That is a trap for whoever writes the next rule, and the reason to write subqueries by default.
+        // AND REFUSED AT THE ROOT TOO, which it was not at first. At the select root a navigating
+        // condition compiles to valid AND correct SQL — the join is registered before the where that reads
+        // it, and when the statement reaches the same entity by two paths the scope binds the one the rule
+        // named. So refusing it rejects something that works. It is refused anyway, because allowing it at
+        // one point and refusing it at the other is the worse of both: a navigating rule would pass every
+        // test whose statement reads the entity as a root, ship, and throw the first time some other
+        // statement joined it. Both points now say the same sentence, with a suffix naming which refused.
         ClientReadScope.registerProvider((dc, token) ->
             isChatMessage(dc)
                 ? ExpressionParser.parseExpression("conversation.viewerPerson=CALLER_PERSON", dc, model())
                 : null);
+
+        checkRefused("a dot-path rule is refused at the select root",
+              "select id, content from ChatMessage m where conversation=$1");
 
         checkRefused("a dot-path rule is refused once the entity is joined",
               "select id from ChatMessageReaction r where message.conversation=$1");

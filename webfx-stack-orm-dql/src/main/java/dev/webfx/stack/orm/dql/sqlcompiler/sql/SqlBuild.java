@@ -660,9 +660,7 @@ public final class SqlBuild {
             // A subquery in the condition builds its own SqlBuild, so its tables do not land here; only a
             // dot path on the scoped entity does. See the javadoc above for the SQL this used to emit.
             if (countJoins() != joinCountBefore)
-                throw new IllegalStateException("A data scope condition must not navigate to another entity:"
-                    + " compiling one for a joined table registered a further join. Express the hop as a"
-                    + " subquery instead, so the scoped row contributes one local column.");
+                throw new IllegalStateException(NAVIGATING_SCOPE_REFUSED + " (reached by a join)");
             return predicateSql;
         } finally {
             setCompilingScopeCondition(wasCompilingScopeCondition);
@@ -672,8 +670,22 @@ public final class SqlBuild {
         }
     }
 
-    /** Joins registered on THIS build, across every table alias. No streams: this compiles to JavaScript. */
-    private int countJoins() {
+    /**
+     * Refused at BOTH injection points, in one wording so a single log filter catches either. The suffix
+     * says which point refused it; the sentence that matters is the same.
+     */
+    public static final String NAVIGATING_SCOPE_REFUSED =
+        "A data scope condition must not navigate to another entity: compiling one registered a further join."
+        + " Express the hop as a subquery instead, so the scoped row contributes one local column.";
+
+    /**
+     * Joins registered on THIS build, across every table alias. No streams: this compiles to JavaScript.
+     *
+     * <p>Public for the same reason {@code ClientReadScope.conditionFor} is — the two injection points are
+     * in different packages, the join one here and the select root in {@code ...sqlcompiler} — and not part
+     * of the surface anyone outside the compiler should call.
+     */
+    public int countJoins() {
         int count = 0;
         for (Map<Join, Join> tableJoins : joins.values())
             count += tableJoins.size();

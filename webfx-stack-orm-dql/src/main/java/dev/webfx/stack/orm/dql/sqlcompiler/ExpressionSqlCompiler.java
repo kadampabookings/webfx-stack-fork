@@ -424,7 +424,18 @@ public final class ExpressionSqlCompiler {
                 // Unconditional rather than "only when the rule needs it": the join point parenthesises
                 // unconditionally too, and a rule that grows a second arm later must not depend on someone
                 // noticing that it now does.
+                // Refused here too, though at the ROOT a navigating condition compiles to valid and correct
+                // SQL: the join is registered before the where that reads it, and when the statement reaches
+                // the same entity by two paths the scope binds the one the rule named. Refused anyway,
+                // because allowing it here and refusing it at the join point is the worse of both. A rule
+                // that navigates would then pass every test whose statement reads the entity as a root and
+                // throw the first time some other statement joins it — a defect that ships, and surfaces in
+                // whichever query happens to join first. It is also the expensive shape the mechanism warns
+                // against: a join added to EVERY read of the entity, evaluated per row.
+                int joinCountBefore = sqlBuild.countJoins();
                 String scopeSql = sqlBuild.compileToScratchSqlText(scopeCondition, modelReader);
+                if (sqlBuild.countJoins() != joinCountBefore)
+                    throw new IllegalStateException(SqlBuild.NAVIGATING_SCOPE_REFUSED + " (at the select root)");
                 sqlBuild.prepareAppend(SqlClause.WHERE, " and ").append('(').append(scopeSql).append(')');
             } finally {
                 sqlBuild.setCompilingScopeCondition(wasCompilingScopeCondition);
