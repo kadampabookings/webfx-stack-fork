@@ -18,6 +18,8 @@ import dev.webfx.stack.orm.expression.terms.Select;
 import dev.webfx.stack.orm.expression.terms.Union;
 import dev.webfx.stack.orm.expression.terms.WithSelect;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -266,6 +268,53 @@ final class DqlClientQueryInspector implements ClientQueryGuard.Inspector {
             allowed.put(key, Boolean.TRUE);
         }
         return null;
+    }
+
+    /**
+     * The server-supplied names this statement binds once compiled under {@code scopeToken}.
+     *
+     * <p>Answered from the COMPILED form, which is the only thing that knows. A data scope condition is
+     * injected by the compiler and appears nowhere in the client's text, so the text test
+     * {@code ServerCallerParameters} uses for an unscoped caller cannot see the terms it carries — a statement
+     * reading a scoped entity needs {@code CALLER_PERSON} while saying nothing of the kind. Compiling says so
+     * exactly: the parameter names of the result are the names it will bind.
+     *
+     * <p>Precise in both directions on purpose, and the second one is the expensive one to get wrong.
+     * Attaching a caller value makes the argument caller-specific, and a push subscription is keyed by its
+     * argument — so answering "all of them" for every statement would give every viewer of a shared query a
+     * stream of their own. A statement that reads nothing scoped must come back empty-handed so those
+     * arguments stay equal and those streams stay shared.
+     *
+     * <p>Uses the cached compile the interceptor is about to perform anyway: {@code parseAndCompileSelect}
+     * memoises by statement and token, so this costs the compile once per shape, not once per query.
+     *
+     * <p>Null on anything it cannot compile — no data source yet, an unparseable statement, a shape this does
+     * not handle. The caller reads null as "could not say" and attaches everything, which is the direction
+     * that keeps a query running.
+     */
+    @Override
+    public String[] serverCallerNamesNeeded(QueryArgument argument, Object scopeToken) {
+        Object dataSourceId = argument == null ? null : argument.getDataSourceId();
+        if (dataSourceId == null || scopeToken == null || !LocalDataSourceService.isInitialised()
+                || !LocalDataSourceService.isDataSourceLocal(dataSourceId))
+            return null;
+        try {
+            DataSourceModel dataSourceModel = DataSourceModelService.getDataSourceModel(dataSourceId);
+            if (dataSourceModel == null)
+                return null;
+            List<String> names = dataSourceModel
+                .parseAndCompileSelect(argument.getStatement(), !argument.isHasDqlRuntime(), scopeToken)
+                .getParameterNames();
+            if (names == null)
+                return new String[0];
+            List<String> callerNames = new ArrayList<>();
+            for (String name : names)
+                if (name != null && name.startsWith("caller.") && !callerNames.contains(name))
+                    callerNames.add(name);
+            return callerNames.toArray(new String[0]);
+        } catch (Throwable e) {
+            return null; // could not say; the caller attaches everything rather than nothing
+        }
     }
 
     /** The dispatch DataSourceModel.compileSelectOrWithSelect performs, with the denying reader in place. */

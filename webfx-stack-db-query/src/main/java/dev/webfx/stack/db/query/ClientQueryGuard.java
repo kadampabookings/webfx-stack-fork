@@ -45,6 +45,41 @@ public final class ClientQueryGuard {
     public interface Inspector {
         /** Why this query must not run for a client, or null when it may. Must not throw. */
         String refusalReason(QueryArgument argument);
+
+        /**
+         * The server-supplied names this statement will need once compiled under {@code scopeToken}, or null
+         * when the inspector cannot say.
+         *
+         * <p>Exists because a data scope condition is injected by the compiler and appears nowhere in the
+         * client's statement text, so the text test {@code ServerCallerParameters} used to rely on cannot see
+         * the terms it carries — see that class. The compiled statement does know: its parameter names are
+         * the ones it will actually bind, the injected condition's included.
+         *
+         * <p>Default null so an inspector that knows nothing of scopes is unaffected, and so a failure to
+         * answer costs precision rather than correctness: the caller attaches everything instead.
+         */
+        default String[] serverCallerNamesNeeded(QueryArgument argument, Object scopeToken) {
+            return null;
+        }
+    }
+
+    /**
+     * Asks the registered inspector which server-supplied names a statement needs, or null when nothing is
+     * registered or it cannot say.
+     *
+     * <p>Swallows a throw for the same reason {@link #decide} does not trust an inspector: one that fails has
+     * not answered. Here that is not a refusal though — an unanswered question means the caller falls back to
+     * attaching every reserved name, which is the conservative direction.
+     */
+    public static String[] serverCallerNamesNeeded(QueryArgument argument, Object scopeToken) {
+        Inspector i = inspector;
+        if (i == null)
+            return null;
+        try {
+            return i.serverCallerNamesNeeded(argument, scopeToken);
+        } catch (Throwable e) {
+            return null;
+        }
     }
 
     /** Refusal messages returned to the client. Deliberately short and saying nothing about the schema. */

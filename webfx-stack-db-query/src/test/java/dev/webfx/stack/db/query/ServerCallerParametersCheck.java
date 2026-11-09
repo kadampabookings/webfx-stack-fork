@@ -89,9 +89,62 @@ public class ServerCallerParametersCheck {
               ClientQueryGuard.refusalReason(QueryArgument.builder().copy(forged).setParameterNames("eventId").build()) == null);
         check("as do unnamed parameters", ClientQueryGuard.refusalReason(plain) == null);
 
+        // ── THE SCOPED CALLER, where the text test stops being sound ─────────────────────────────────────
+        // A data scope condition is injected by the COMPILER and appears nowhere in the client's statement,
+        // so a statement reading a scoped entity needs caller.person while saying nothing of the kind. The
+        // text test cannot see that; the inspector compiles and can. Faked here — the real answer comes from
+        // DqlClientQueryInspector, which needs a domain model this module has no business owning.
+        ServerCallerParameters.registerResolver(name -> "caller.person".equals(name) ? (Object) 555 : null);
+        ClientQueryGuard.registerInspector(new ClientQueryGuard.Inspector() {
+            @Override public String refusalReason(QueryArgument argument) { return null; }
+            @Override public String[] serverCallerNamesNeeded(QueryArgument argument, Object scopeToken) {
+                // "ChatMessage is scoped by the member, Event is not" — what a provider's rules amount to.
+                return argument.getStatement().contains("ChatMessage")
+                    ? new String[] {"caller.person"} : new String[0];
+            }
+        });
+
+        QueryArgument scopedRead = argument("select id, content from ChatMessage m where conversation=$1", 42);
+        QueryArgument scopedAttached = ServerCallerParameters.attach(scopedRead, "member");
+        check("a statement that never mentions a caller term still gets one, when a scope will inject it",
+              Arrays.asList(scopedAttached.getParameterNames()).contains("caller.person"));
+        // Named parameters sit ABOVE the caller's positional block, so an index into the NAMES array is not
+        // an index into the PARAMETERS array - it is offset by however many positional ones came first.
+        // Getting this wrong is what made this check fail the first time it ran, reading the client's own 42.
+        check("and the value is the caller's, so the injected predicate has something to bind",
+              Integer.valueOf(555).equals(namedValue(scopedAttached, "caller.person")));
+        check("without the token it is NOT attached - which is the bug this closes",
+              !Arrays.asList(ServerCallerParameters.attach(scopedRead).getParameterNames() == null
+                  ? new String[0] : ServerCallerParameters.attach(scopedRead).getParameterNames())
+                  .contains("caller.person"));
+
+        // The other direction, and the one that costs money if it is wrong: a scoped CALLER reading an
+        // UNSCOPED entity must still produce an argument equal to everyone else's, or every viewer of a
+        // shared query gets a subscription of their own.
+        QueryArgument unscopedRead = argument("select id from Event e where id=$1", 7);
+        check("a scoped caller reading an unscoped entity is left shareable",
+              ServerCallerParameters.attach(unscopedRead, "member") == unscopedRead);
+        check("so two differently-scoped callers still share that subscription",
+              ServerCallerParameters.attach(unscopedRead, "member")
+                  .equals(ServerCallerParameters.attach(unscopedRead, "backoffice")));
+
+        // An inspector that cannot say must not leave the query with an unbound slot.
+        ClientQueryGuard.registerInspector(argument -> null); // the lambda form: no override, default null
+        check("an inspector that cannot say makes attach conservative, not empty-handed",
+              Arrays.asList(ServerCallerParameters.attach(scopedRead, "member").getParameterNames())
+                  .contains("caller.person"));
+
         System.out.println(fail == 0 ? "\nALL " + pass + " PASS" : "\n" + fail + " FAILED");
         if (fail > 0)
             throw new AssertionError(fail + " caller parameter checks failed");
+    }
+
+    /** The value bound to a named parameter: names sit above the positional block, not alongside it. */
+    private static Object namedValue(QueryArgument argument, String name) {
+        String[] names = argument.getParameterNames();
+        Object[] parameters = argument.getParameters();
+        int nameIndex = Arrays.asList(names).indexOf(name);
+        return nameIndex < 0 ? null : parameters[parameters.length - names.length + nameIndex];
     }
 
     private static QueryArgument argument(String statement, Object... parameters) {

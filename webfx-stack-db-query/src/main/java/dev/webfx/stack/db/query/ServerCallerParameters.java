@@ -75,9 +75,15 @@ public final class ServerCallerParameters {
      * viewer of a shared query would get a stream of their own — deduplication across clients is the thing
      * that makes push affordable, and it would collapse.
      *
-     * <p>Sound in the only direction that matters: a term has to appear literally in the statement to be
-     * parsed as one, so this cannot miss a statement that uses one. It CAN fire on a statement that merely
-     * mentions the text inside a literal, and that costs a value nobody binds, which the binding seam drops.
+     * <p>Sound for a term the CLIENT wrote: one has to appear literally in the statement to be parsed as one.
+     * It CAN fire on a statement that merely mentions the text inside a literal, and that costs a value nobody
+     * binds, which the binding seam drops.
+     *
+     * <p><b>It is NOT sound for a term the SERVER injects.</b> A data scope condition is added by the compiler
+     * and appears nowhere in this text, so a statement reading a scoped entity needs {@code CALLER_PERSON}
+     * while saying nothing of the kind — the compiler emits the parameter slot and nothing fills it. That is
+     * what {@link #attach(QueryArgument, Object)} asks the inspector about; this text test remains the answer
+     * for an unscoped caller, where it is exactly right and costs nothing.
      */
     private static boolean mayUseCallerTerm(String statement) {
         return statement != null && statement.contains("CALLER_");
@@ -88,20 +94,57 @@ public final class ServerCallerParameters {
      * resolved values appended and named.
      */
     public static QueryArgument attach(QueryArgument argument) {
-        if (resolver == null || argument == null || !mayUseCallerTerm(argument.getStatement()))
+        return attach(argument, null);
+    }
+
+    /**
+     * The argument to run, with the names this statement will need resolved and appended.
+     *
+     * <p><b>Which names, and why it cannot simply be all of them.</b> Appending unconditionally would make
+     * every argument caller-specific, and a push subscription is keyed by its argument — so every viewer of a
+     * shared query would get a stream of their own and the deduplication that makes push affordable would
+     * collapse. That is the constraint {@link #mayUseCallerTerm} was built around, and it still holds.
+     *
+     * <p><b>With a scope token the text test is no longer sound</b>, because the condition the compiler
+     * injects is not in the client's text. So the inspector is asked instead: it compiles the statement under
+     * the token — a cached compile the interceptor is about to repeat — and reports the names the compiled
+     * form actually binds. That is precise in both directions: a statement reading a scoped entity gets the
+     * value even though it never mentions it, and a statement reading nothing scoped keeps an argument equal
+     * to every other caller's, so those streams still share.
+     *
+     * <p>When the inspector cannot answer, every reserved name is attached rather than none. That costs
+     * sharing for one statement; the other direction costs a parameter slot nothing fills, which fails the
+     * query.
+     */
+    public static QueryArgument attach(QueryArgument argument, Object scopeToken) {
+        if (resolver == null || argument == null)
             return argument;
+        String[] attachNames;
+        if (scopeToken == null) {
+            // No scope, so nothing can be injected and the client's own text is the whole truth. Byte for
+            // byte what this did before scopes existed.
+            if (!mayUseCallerTerm(argument.getStatement()))
+                return argument;
+            attachNames = RESERVED_NAMES;
+        } else {
+            attachNames = ClientQueryGuard.serverCallerNamesNeeded(argument, scopeToken);
+            if (attachNames == null) // could not say - attach everything rather than bind nothing
+                attachNames = RESERVED_NAMES;
+            else if (attachNames.length == 0) // said, and the answer is none: leave the argument shareable
+                return argument;
+        }
         Object[] parameters = argument.getParameters();
         String[] names = argument.getParameterNames();
         int suppliedCount = Arrays.length(parameters);
-        Object[] newParameters = new Object[suppliedCount + RESERVED_NAMES.length];
-        String[] newNames = new String[Arrays.length(names) + RESERVED_NAMES.length];
+        Object[] newParameters = new Object[suppliedCount + attachNames.length];
+        String[] newNames = new String[Arrays.length(names) + attachNames.length];
         for (int i = 0; i < suppliedCount; i++)
             newParameters[i] = parameters[i];
         for (int i = 0; i < Arrays.length(names); i++)
             newNames[i] = names[i];
-        for (int i = 0; i < RESERVED_NAMES.length; i++) {
-            newParameters[suppliedCount + i] = resolver.resolveCallerValue(RESERVED_NAMES[i]);
-            newNames[Arrays.length(names) + i] = RESERVED_NAMES[i];
+        for (int i = 0; i < attachNames.length; i++) {
+            newParameters[suppliedCount + i] = resolver.resolveCallerValue(attachNames[i]);
+            newNames[Arrays.length(names) + i] = attachNames[i];
         }
         return QueryArgument.builder().copy(argument).setParameters(newParameters).setParameterNames(newNames).build();
     }
