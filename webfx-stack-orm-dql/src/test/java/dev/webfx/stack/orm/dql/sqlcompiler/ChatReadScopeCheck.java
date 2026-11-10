@@ -139,6 +139,38 @@ public class ChatReadScopeCheck {
               "select m.id, m.id from chat_message as m where m.conversation_id=$1"
             + " and (m.conversation_id in (select tt1.id from conversation as tt1 where tt1.event_id=any($2)))");
 
+        // ── THE BACK-OFFICE ARM, which has TWO arms and is the one that will actually run ───────────────
+        // A grant row names an event, an event type, or neither, and an organisation-wide one never widens
+        // into granted events — 33 of 43 staging grant rows are organisation-wide and 18 of 25 back-office
+        // users hold no event grant at all. So `event in CALLER_GRANTED_EVENTS` alone binds an empty array
+        // for most operators and the support inbox returns nothing. The second arm reaches the organisation
+        // through a SUBQUERY, because event.organization is a path and a path is refused at both points.
+        //
+        // Both arms in one term is what makes the parentheses load-bearing: appended bare, the caller's own
+        // filter would regroup as `(<filter> and A) or B` and return rows it excluded. The root point gained
+        // those parentheses in 7d79a577; this pins that they hold for the rule that depends on them.
+        ClientReadScope.registerProvider((dc, token) ->
+            "Conversation".equals(String.valueOf(dc))
+                ? ExpressionParser.parseExpression(
+                    "event in CALLER_GRANTED_EVENTS"
+                  + " or event in (select id from Event where organization in CALLER_GRANTED_ORGANIZATIONS)",
+                    dc, model())
+                : null);
+
+        check("the back-office arm at the root keeps the caller's own filter outside its or",
+              "select id, status from Conversation c where type=$1",
+              "select c.id, c.id, c.status from conversation as c where c.type=$1"
+            + " and (c.event_id=any($2) or c.event_id in"
+            + " (select tt1.id from event as tt1 where tt1.organization_id=any($3)))");
+
+        check("and survives the join the back-office inbox makes on every read",
+              "select id from ChatMessage m where conversation.event=$1",
+              "select m.id, m.id from chat_message as m"
+            + " join conversation j2 on j2.id=m.conversation_id"
+            + " and (j2.event_id=any($2) or j2.event_id in"
+            + " (select tt1.id from event as tt1 where tt1.organization_id=any($3)))"
+            + " where j2.event_id=$1");
+
         // ── THE BOUNDARY. Delete a subquery above, write the dot path it replaces, and this is the
         // refusal that comes back. It is also the case that found the hole it now covers.
         //
@@ -234,7 +266,8 @@ public class ChatReadScopeCheck {
                 .declareAsForeignField("Message", "conversation")
                 .declareAsForeignField("ChatMessageReaction", "message")
                 .declareAsForeignField("Conversation", "viewerPerson")
-                .declareAsForeignField("Conversation", "event");
+                .declareAsForeignField("Conversation", "event")
+                .declareAsForeignField("Event", "organization");
     }
 
     private static ParserDomainModelReaderMock model() {
@@ -242,6 +275,7 @@ public class ChatReadScopeCheck {
                 .declareFields("Conversation", "id,viewerPerson,event,type,status")
                 .declareFields("ChatMessage", "id,conversation,person,kind,content")
                 .declareFields("Message", "id,conversation,person,kind,content")
-                .declareFields("ChatMessageReaction", "id,message,person,emoji");
+                .declareFields("ChatMessageReaction", "id,message,person,emoji")
+                .declareFields("Event", "id,organization,name");
     }
 }
