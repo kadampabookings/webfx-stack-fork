@@ -60,7 +60,23 @@ public enum SessionMethod {
     SUPPORT_VIEW_PASS("sv"),
 
     /** A one-time back-office-view pass, minted by a super administrator who authenticated separately. */
-    BACKOFFICE_VIEW_PASS("bov");
+    BACKOFFICE_VIEW_PASS("bov"),
+
+    /**
+     * A device login approved in a browser: the holder of this session presented NOTHING, and somebody else's
+     * fully authenticated session approved it.
+     *
+     * <p><b>It is never inherited from the approving session, and that is the point.</b> Were the approver's
+     * own {@code pk} or {@code totp} carried across, {@code FactorRequest.includesSecondFactor} would answer
+     * true for a session that never presented a factor, and a super administrator's command-line token could
+     * then approve and reset other people's factors. Its own code keeps the claim honest: this session
+     * proved nothing itself, whatever authorised it.
+     *
+     * <p>Which is also why the code is safe to add to an older build's vocabulary. This enum's contract is
+     * that an unrecognised code reads as "nothing is proven" — the fail-safe direction here, unlike
+     * {@link SessionTier}, where an unknown tier reads as the back office's longer life.
+     */
+    DEVICE_APPROVAL("dev");
 
     private final String code;
 
