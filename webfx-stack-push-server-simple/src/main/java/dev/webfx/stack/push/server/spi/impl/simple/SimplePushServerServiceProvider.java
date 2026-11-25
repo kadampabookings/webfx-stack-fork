@@ -67,15 +67,30 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
 
     @Override
     public void clientIsLive(Object clientRunId) {
-        PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
-        if (pushClientInfo != null) {
-            // A client we could not reach has just spoken — typically its first message on a new socket.
-            // Ask it now rather than at the next probe, so its streams resume in a round trip.
-            if (pushClientInfo.isUnreachable())
-                pushClientInfo.probeNow();
-            else
-                pushClientInfo.rescheduleNextPing();
-        }
+        // CREATES the entry, and that is the fix for a real refusal rather than tidiness. push() used to be
+        // the only path that created one, so a connection the server had never pushed to had no entry at
+        // all — and with no entry there is nothing for setClientSessionFamily to attach an owner to, so
+        // isClientOwnedBySession answered no for a perfectly good client. The device login met it head on:
+        // a fresh CLI asks to be approved on its very first message, racing the first push the server
+        // happens to send it (the authz one), and when the request won, the request was refused with "this
+        // connection is not yet registered for server pushes; try again in a moment" — advice that could
+        // not work, because nothing about trying again makes a push happen. Intermittent on staging, which
+        // is what made it look like a host difference before it was traced here.
+        //
+        // Liveness is the honest trigger: the entry describes a connection, and this is the moment the
+        // server learns the connection is there. Waiting for a push made the entry's existence depend on
+        // whether anyone had had a reason to send one, which is unrelated to whether the client exists.
+        //
+        // The entry a live tick creates is reaped like any other, because the branch below starts the ping
+        // chain for it: a client that goes quiet fails its ping, turns unreachable, walks the probe ladder
+        // and is removed by pushFailed. Nothing accumulates that a pushed-to client would not.
+        PushClientInfo pushClientInfo = getOrCreatePushClientInfo(clientRunId);
+        // A client we could not reach has just spoken — typically its first message on a new socket.
+        // Ask it now rather than at the next probe, so its streams resume in a round trip.
+        if (pushClientInfo.isUnreachable())
+            pushClientInfo.probeNow();
+        else
+            pushClientInfo.rescheduleNextPing();
     }
 
     @Override
@@ -100,9 +115,10 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
 
     @Override
     public void setClientSessionFamily(Object clientRunId, String sessionFamilyId, String ownerSessionId) {
-        // Attach to an already-registered client only, like setClientMetadata — a not-yet-registered one
-        // gets it on a later live tick, and creating an entry here would invent a push client that nothing
-        // has ever pushed to.
+        // Attach to an already-registered client only, like setClientMetadata. That is no longer a wait:
+        // the interceptor calls clientIsLive first and THAT creates the entry, so by the time this runs on
+        // a live tick there is one. It stays a get() because this is not the place that decides a client
+        // exists — a claim should attach to a connection the server has seen, never conjure one.
         PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
         if (pushClientInfo == null || ownerSessionId == null)
             return;

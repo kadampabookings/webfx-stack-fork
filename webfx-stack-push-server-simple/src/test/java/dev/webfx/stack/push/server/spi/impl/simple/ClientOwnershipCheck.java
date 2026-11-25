@@ -50,6 +50,23 @@ public class ClientOwnershipCheck {
         check("an entry with no owner recorded answers no",
               !provider.isClientOwnedBySession("run-1", "session-a"));
 
+        System.out.println("a client that has only ever SPOKEN can be owned - no push required:");
+        // The refusal this prevents, met on staging. push() used to be the only path that created an entry,
+        // so a connection nobody had pushed to had none - and with no entry a claim has nothing to attach
+        // to, so isClientOwnedBySession answered no for a good client. A fresh CLI asking to be approved on
+        // its first message raced the server's first push to it and was refused "try again in a moment",
+        // which could never help: trying again does not make a push happen. Liveness creates the entry now.
+        provider.clientIsLive("run-live-only");
+        provider.setClientSessionFamily("run-live-only", "family-live", "session-live");
+        check("a live tick alone is enough to be owned",
+              provider.isClientOwnedBySession("run-live-only", "session-live"));
+        check("and it is owned by THAT session, not by any other",
+              !provider.isClientOwnedBySession("run-live-only", "session-other"));
+        // The order the interceptor actually uses is clientIsLive then setClientSessionFamily, so the claim
+        // lands on the first message. Nothing here may be read as "any runId in any message is owned".
+        check("a runId that has never been live is still owned by nobody",
+              !provider.isClientOwnedBySession("run-never-seen", "session-live"));
+
         System.out.println("once claimed, its owner is recognised and nobody else is:");
         provider.setClientSessionFamily("run-1", "family-1", "session-a");
         check("the claiming session owns it", provider.isClientOwnedBySession("run-1", "session-a"));
@@ -86,6 +103,9 @@ public class ClientOwnershipCheck {
               !bare.isClientOwnedBySession("run-1", "session-a") && !bare.isClientOwnedBySession(null, null));
 
         System.out.println("\n" + pass + " passed, " + fail + " failed");
-        if (fail > 0) System.exit(1);
+        // Explicit, like every sibling check, and now load-bearing: clientIsLive() schedules this client's
+        // first ping, which boots the platform scheduler and its non-daemon threads. Returning from main()
+        // left the JVM alive with every assertion already passed - a green run that never ends.
+        System.exit(fail == 0 ? 0 : 1);
     }
 }
