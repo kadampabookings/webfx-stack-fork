@@ -88,6 +88,33 @@ public interface PushServerServiceProvider {
     }
 
     /**
+     * Whether the connection identified by {@code sessionId} is the one that owns {@code clientRunId} —
+     * that is, whether pushing to that run id reaches THAT caller and not somebody who named the same id.
+     *
+     * <p><b>A question, deliberately, and not a getter.</b> The owning session id is the same kind of fact
+     * as the family above and belongs in a snapshot just as little, so this answers what a caller needs to
+     * know without handing the value out to be logged, compared loosely or stored.
+     *
+     * <p><b>Why it exists.</b> A push normally lands milliseconds after the state that produced it, and over
+     * that distance a self-chosen run id is no great risk. The browser-approved device login breaks that
+     * assumption: it mints a session for a run id named FIVE MINUTES EARLIER, while a person reads a code
+     * and decides. Over that distance "the client said this run id" is not good enough, and this restores
+     * the same guarantee {@code setClientSessionFamily} already gives revocation — the first session to
+     * claim a run id owns it, and nobody else may act as it.
+     *
+     * <p>Intended at BOTH ends of such a flow: when the request is made, so a client that cannot be
+     * delivered to is refused immediately rather than after somebody has approved it; and again before the
+     * session is released, which is the check that actually matters.
+     *
+     * <p><b>Fails closed.</b> Unknown run id, no owner recorded yet, null argument, or a provider that does
+     * not track ownership — all answer false. A caller gated on this refuses rather than proceeds, which is
+     * the only safe direction for the question being asked.
+     */
+    default boolean isClientOwnedBySession(Object clientRunId, String sessionId) {
+        return false;
+    }
+
+    /**
      * The run ids of connected clients whose token belongs to one of these families — whom to tell that
      * their session is over. Empty when nothing matches, which is the ordinary case: the client is usually
      * connected to the OTHER instance.

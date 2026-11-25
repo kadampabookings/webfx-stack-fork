@@ -129,6 +129,17 @@ public final class SimplePushServerServiceProvider implements PushServerServiceP
         pushClientInfo.sessionFamilyId = sessionFamilyId;
     }
 
+    @Override
+    public boolean isClientOwnedBySession(Object clientRunId, String sessionId) {
+        if (clientRunId == null || sessionId == null)
+            return false;
+        PushClientInfo pushClientInfo = pushClientInfos.get(clientRunId);
+        // No entry, or an entry whose owner is not yet recorded, both answer false. The second case is a
+        // client that has connected but not yet completed a live tick — real, brief, and not something to
+        // wave through: a caller that needs this answer needs it to be a fact.
+        return pushClientInfo != null && sessionId.equals(pushClientInfo.ownerSessionId);
+    }
+
     /**
      * Whether a session may say which family a runId's client belongs to, given who claimed that runId first.
      *

@@ -54,6 +54,15 @@ public final class PushServerService {
         getProvider().setClientSessionFamily(clientRunId, sessionFamilyId, ownerSessionId);
     }
 
+    /**
+     * See {@link PushServerServiceProvider#isClientOwnedBySession} — whether pushing to this run id reaches
+     * the connection that claimed it, which matters wherever a push follows its request by more than an
+     * instant. Fails closed: false means "do not push", never "unknown, carry on".
+     */
+    public static boolean isClientOwnedBySession(Object clientRunId, String sessionId) {
+        return getProvider().isClientOwnedBySession(clientRunId, sessionId);
+    }
+
     /** The run ids of connected clients whose token belongs to one of these families. */
     public static List<Object> snapshotClientRunIdsOfFamilies(Collection<String> sessionFamilyIds) {
         return getProvider().snapshotClientRunIdsOfFamilies(sessionFamilyIds);
