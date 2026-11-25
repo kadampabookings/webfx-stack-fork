@@ -77,7 +77,7 @@ public final class CallerSession {
      * credentials record for exactly as long as the call takes.
      */
     public static CallerSession signIn(String username, char[] password, Audience audience, long timeoutMillis) {
-        Object state = StateAccessor.setBackoffice(StateAccessor.createEmptyState(), audience.backofficeFlag());
+        Object state = outgoingState(audience);
         DeliveryOptions options = new DeliveryOptions().setState(state);
         Future<Object> call = BusCallService.call(
             AuthenticationServiceBusAddress.AUTHENTICATE_METHOD_ADDRESS,
@@ -118,7 +118,7 @@ public final class CallerSession {
      */
     public static void sendVerificationCode(String email, ServerEndpoint endpoint, Audience audience,
                                             long timeoutMillis) {
-        Object state = StateAccessor.setBackoffice(StateAccessor.createEmptyState(), audience.backofficeFlag());
+        Object state = outgoingState(audience);
         DeliveryOptions options = new DeliveryOptions().setState(state);
         Future<Object> call = BusCallService.call(
             AuthenticationServiceBusAddress.AUTHENTICATE_METHOD_ADDRESS,
@@ -141,7 +141,7 @@ public final class CallerSession {
      */
     public static CallerSession signInWithVerificationCode(String username, char[] verificationCode,
                                                            Audience audience, long timeoutMillis) {
-        Object state = StateAccessor.setBackoffice(StateAccessor.createEmptyState(), audience.backofficeFlag());
+        Object state = outgoingState(audience);
         DeliveryOptions options = new DeliveryOptions().setState(state);
         Future<Object> call = BusCallService.call(
             AuthenticationServiceBusAddress.AUTHENTICATE_METHOD_ADDRESS,
@@ -149,6 +149,57 @@ public final class CallerSession {
             options);
         ClientRuntime.await(call, timeoutMillis, "Redeeming a verification code as " + username);
         return new CallerSession(username, audience);
+    }
+
+    /**
+     * The state every call of this tool carries: which arm it is asking for, and what kind of client is asking.
+     *
+     * <h3>Why the profile is here at all</h3>
+     *
+     * <p>The server records a {@code clientProfile} per connected run — the back office's {@code /monitor} page
+     * breaks its connected clients down by it, and {@code ListLiveSessions} shows a super administrator who is
+     * signed in. A browser sends {@code browser|os|deviceType} ("Chrome|Windows|phone"); every Java client sends
+     * NOTHING, because the string is built from {@code navigator}. So a command-line session arrived as a blank,
+     * indistinguishable from any other client that does not report.
+     *
+     * <p>Its user agent is no better: {@code JreClientUserAgentProvider} reports
+     * {@code System.getProperty("java.runtime.name")} — "OpenJDK Runtime Environment", true of this tool and of
+     * every other JVM client alike. Changing THAT would change what every WebFX JRE application reports, which is
+     * not this module's business; the profile is the client's own to state.
+     *
+     * <h3>What it is, and what it is not</h3>
+     *
+     * <p>Same shape as the browser's, so the existing breakdowns keep working: the client, the operating system,
+     * and a device type taken from the four the page already knows rather than a fifth invented here — a terminal
+     * runs on a machine, and "desktop" is the honest one of those four.
+     *
+     * <p><b>It is a claim, not a fact.</b> Any client can send any string, and nothing on the server checks this
+     * one. It is for telling an operator's own sessions apart on a monitoring page, never for a decision — see
+     * the device-login design note, which keeps observed and claimed apart for exactly this reason.
+     */
+    static Object outgoingState(Audience audience) {
+        Object state = StateAccessor.setBackoffice(StateAccessor.createEmptyState(), audience.backofficeFlag());
+        return StateAccessor.setClientProfile(state, clientProfile());
+    }
+
+    /** {@code <client>|<os>|desktop} — see {@link #outgoingState}. */
+    static String clientProfile() {
+        String os = System.getProperty("os.name");
+        return clientName + "|" + (os == null || os.isBlank() ? "unknown" : os) + "|desktop";
+    }
+
+    private static String clientName = "CLI";
+
+    /**
+     * Names the program for the monitoring pages, for an application built on this module to call once at boot.
+     *
+     * <p>Defaulted rather than required, and defaulted to something generic: this module is WebFX's, so it cannot
+     * know it is running inside KBS. Unset, a session still reports "CLI" and is still told apart from a browser,
+     * which is the whole point.
+     */
+    public static void setClientName(String name) {
+        if (name != null && !name.isBlank())
+            clientName = name.trim();
     }
 
     public static CallerSession restore(SessionCache.Entry entry, long timeoutMillis) {

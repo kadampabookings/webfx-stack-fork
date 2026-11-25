@@ -1,6 +1,7 @@
 package dev.webfx.stack.db.query.cli;
 
 import dev.webfx.stack.db.query.QueryResult;
+import dev.webfx.stack.session.state.StateAccessor;
 
 import static dev.webfx.stack.db.query.cli.Checks.check;
 import static dev.webfx.stack.db.query.cli.Checks.report;
@@ -112,6 +113,34 @@ public class CliSurfaceCheck {
               new DqlResult(new QueryResult(3, 1, new Object[] {1L, 2L, 3L}, new String[] {"id"})).rowCount() == 3);
         check("an empty result counts zero rows",
               new DqlResult(new QueryResult(0, 1, new Object[0], new String[] {"id"})).rowCount() == 0);
+
+        section("What this client calls itself, for a monitoring page and nothing else");
+        // Left until last on purpose: the name is process-wide state, and setting it earlier would change
+        // what the cases above observe. A browser sends browser|os|deviceType; every Java client sent nothing,
+        // so a command-line session arrived indistinguishable from any other client that does not report.
+        String beforeNaming = CallerSession.clientProfile();
+        check("it defaults to CLI, so an application that never names itself is still not a browser",
+              beforeNaming.startsWith("CLI|"));
+        check("three fields, as the browser's profile has, so the existing breakdowns keep working",
+              beforeNaming.split("\\|").length == 3);
+        check("and the device type is one of the four that page already knows, not a fifth invented here",
+              beforeNaming.endsWith("|desktop"));
+        CallerSession.setClientName("KBS CLI");
+        check("naming it changes the client field and nothing else",
+              CallerSession.clientProfile().startsWith("KBS CLI|")
+              && CallerSession.clientProfile().endsWith("|desktop"));
+        CallerSession.setClientName("   ");
+        check("a blank name is ignored rather than erasing the one in use",
+              CallerSession.clientProfile().startsWith("KBS CLI|"));
+        CallerSession.setClientName(null);
+        check("and so is a null one", CallerSession.clientProfile().startsWith("KBS CLI|"));
+        // The one that matters: a string nobody puts on the wire tells a monitoring page nothing. Asserting
+        // the builder alone would pass with the setClientProfile call deleted.
+        Object state = CallerSession.outgoingState(Audience.BACK_OFFICE);
+        check("and it REACHES the state every call carries, not just the method that builds it",
+              CallerSession.clientProfile().equals(StateAccessor.getClientProfile(state)));
+        check("beside the arm, which that state has always carried",
+              Boolean.TRUE.equals(StateAccessor.getBackoffice(state)));
 
         section("A credential is never taken from the command line");
         // There is deliberately no option carrying a password or a verification code: both are read from a
