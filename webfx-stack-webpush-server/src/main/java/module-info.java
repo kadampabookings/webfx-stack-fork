@@ -15,8 +15,6 @@ module webfx.stack.webpush.server {
     // Direct dependencies modules
     requires io.vertx.core;
     requires io.vertx.web;
-    requires org.bouncycastle.provider;
-    requires web.push;
     requires webfx.platform.ast;
     requires webfx.platform.async;
     requires webfx.platform.boot;

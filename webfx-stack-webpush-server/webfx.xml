@@ -47,38 +47,10 @@
         <provider interface="dev.webfx.stack.com.serial.spi.SerialCodec">dev.webfx.stack.webpush.buscall.serial.UnsubscribePushNotificationsResultSerialCodec</provider>
     </providers>
 
-    <required-libraries>
-        <!-- nl.martijndwars:web-push 5.x — used ONLY for `Encryption.encrypt(...)`
-             (RFC 8291 payload encryption). We do not use its `PushService` HTTP
-             client (we have webfx Fetch) nor its JWT helpers (we have VapidSigner).
-             The Apache HttpClient transitive dep is excluded since we don't need it.
-             BouncyCastle is required for ECDH key parsing. -->
-        <library name="web-push">
-            <groupId>nl.martijndwars</groupId>
-            <artifactId>web-push</artifactId>
-            <version>5.1.2</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.httpcomponents.client5</groupId>
-                    <artifactId>httpclient5</artifactId>
-                </exclusion>
-            </exclusions>
-            <exported-packages>
-                <package>nl.martijndwars.webpush</package>
-            </exported-packages>
-        </library>
-        <library name="org.bouncycastle.provider"> <!-- JPMS module name, matches BC's Automatic-Module-Name -->
-            <groupId>org.bouncycastle</groupId>
-            <artifactId>bcprov-jdk18on</artifactId>
-            <version>1.86</version>
-            <exported-packages>
-                <package>org.bouncycastle.jce</package>
-                <package>org.bouncycastle.jce.interfaces</package>
-                <package>org.bouncycastle.jce.provider</package>
-                <package>org.bouncycastle.jce.spec</package>
-                <package>org.bouncycastle.math.ec</package>
-            </exported-packages>
-        </library>
-    </required-libraries>
+    <!-- No third-party library: RFC 8291 payload encryption (PayloadEncryptor) and VAPID
+         signing (VapidSigner) both run on the JDK's own crypto. nl.martijndwars:web-push was
+         removed in November 2026: we called only its encrypt method, yet it brought
+         async-http-client (+ Netty 4.1), jose4j, httpasyncclient and jcommander to the server
+         at runtime, carrying 20 open dependency alerts, one Critical. BouncyCastle went with it. -->
 
 </project>
