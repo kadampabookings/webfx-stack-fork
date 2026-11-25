@@ -152,6 +152,71 @@ public final class CallerSession {
     }
 
     /**
+     * Sends any credentials object to the authenticate endpoint carrying this run's audience, and answers
+     * with whatever the server replied.
+     *
+     * <p>Exists because the credentials of an application's own flows are the APPLICATION's types, not this
+     * module's — a device login is Modality's, as a magic-link context is. This module supplies the one
+     * thing a caller cannot assemble from outside the package: the outgoing state that carries the
+     * requested audience, without which the server decides the arm from the executable's name.
+     *
+     * <p>It does NOT mint anything by itself and must not be mistaken for a login. A flow whose session
+     * arrives later, by push, uses {@link #awaitPushedSession} for the second half.
+     *
+     * @param what what to say if it fails or times out — never the credentials, which may hold a secret
+     */
+    public static Object callWithAudience(Object credentials, Audience audience, long timeoutMillis,
+                                          String what) {
+        DeliveryOptions options = new DeliveryOptions().setState(outgoingState(audience));
+        Future<Object> call = BusCallService.call(
+            AuthenticationServiceBusAddress.AUTHENTICATE_METHOD_ADDRESS, credentials, options);
+        return ClientRuntime.await(call, timeoutMillis, what);
+    }
+
+    /**
+     * Waits for a session this run did not ask for twice: one somebody else approves, which then arrives on
+     * this connection by push.
+     *
+     * <h3>Watching a local field is not the polling the design removed</h3>
+     *
+     * <p>RFC 8628 has a client ask the server, again and again, whether anybody has approved yet. Nothing
+     * here asks the server anything: the session is pushed to this run's own address, {@code
+     * ClientSideStateSession} applies it on the bus thread, and this loop watches the field it sets. No
+     * request leaves the machine while it waits, so there is no {@code authorization_pending}, no {@code
+     * slow_down}, and no interval to tune — the two have the same shape and nothing else in common.
+     *
+     * <p>Returns null when nothing arrived before {@code waitMillis}. That is the ordinary ending for a
+     * request nobody approved, so it is a value rather than an exception: the caller has something to print
+     * and no stack trace to read.
+     *
+     * @param username what this run records about itself; the server has already decided whose session it is
+     */
+    public static CallerSession awaitPushedSession(String username, Audience audience, long waitMillis) {
+        // Captured first: a run that somehow already holds a token must not report the OLD one as newly
+        // approved. In practice this is null — the command refuses to start otherwise — and checking costs
+        // nothing against mistaking a stale session for a fresh grant.
+        String tokenBefore = ClientSideStateSession.getInstance().getUserToken();
+        long deadline = System.currentTimeMillis() + waitMillis;
+        while (System.currentTimeMillis() < deadline) {
+            String token = ClientSideStateSession.getInstance().getUserToken();
+            if (token != null && !token.equals(tokenBefore))
+                return new CallerSession(username, audience);
+            try {
+                Thread.sleep(POLL_INTERVAL_MILLIS);
+            } catch (InterruptedException e) {
+                // Somebody pressed Ctrl-C. Restore the flag and stop waiting rather than swallowing it:
+                // a wait that ignores an interrupt is a wait that cannot be ended.
+                Thread.currentThread().interrupt();
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** How often the local field is looked at. Nothing leaves the machine, so this is not a request rate. */
+    private static final long POLL_INTERVAL_MILLIS = 250;
+
+    /**
      * The state every call of this tool carries: which arm it is asking for, and what kind of client is asking.
      *
      * <h3>Why the profile is here at all</h3>
