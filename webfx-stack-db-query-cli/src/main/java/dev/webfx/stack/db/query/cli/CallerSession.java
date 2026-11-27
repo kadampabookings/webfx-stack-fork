@@ -191,11 +191,34 @@ public final class CallerSession {
      *
      * @param username what this run records about itself; the server has already decided whose session it is
      */
-    public static CallerSession awaitPushedSession(String username, Audience audience, long waitMillis) {
-        // Captured first: a run that somehow already holds a token must not report the OLD one as newly
-        // approved. In practice this is null — the command refuses to start otherwise — and checking costs
-        // nothing against mistaking a stale session for a fresh grant.
-        String tokenBefore = ClientSideStateSession.getInstance().getUserToken();
+    /**
+     * The token this run holds right now, or null — captured by a caller that is about to ask for a
+     * session, so it can tell a new one from the one it already had.
+     *
+     * <p>Exists because WHEN that is captured decides whether a fast push is seen at all. See the overload
+     * below.
+     */
+    public static String currentToken() {
+        return ClientSideStateSession.getInstance().getUserToken();
+    }
+
+    /**
+     * Waits for a session that arrives by push, treating anything different from {@code tokenBefore} as it.
+     *
+     * <p><b>The caller captures the "before", and that is the whole point of this overload.</b> The
+     * three-argument version captures it when the wait STARTS, which is correct only while the push is
+     * slower than the code between the request and the wait. A browser-approved device login is minutes
+     * slow, so it never noticed. A guest login is not: the gateway validates the cart link and pushes
+     * within the same call, so the session can land BEFORE the wait begins — and then "before" is already
+     * the new token, nothing ever differs from it, and the run reports that no session arrived while
+     * holding one. Which is exactly how it read.
+     *
+     * <p>So a caller that may be pushed to quickly takes {@link #currentToken()} before it asks, and hands
+     * it here. A token that is already different on the first look is returned immediately rather than
+     * waited out.
+     */
+    public static CallerSession awaitPushedSession(String username, Audience audience, long waitMillis,
+                                                   String tokenBefore) {
         long deadline = System.currentTimeMillis() + waitMillis;
         while (System.currentTimeMillis() < deadline) {
             String token = ClientSideStateSession.getInstance().getUserToken();
@@ -211,6 +234,17 @@ public final class CallerSession {
             }
         }
         return null;
+    }
+
+    /**
+     * Waits for a pushed session, capturing the "before" token itself.
+     *
+     * <p>Safe only where the push cannot beat the code between asking and waiting — a device login, where
+     * a person reads a code first. Anything pushed within the answering call must use the overload above
+     * and capture the token before it asks.
+     */
+    public static CallerSession awaitPushedSession(String username, Audience audience, long waitMillis) {
+        return awaitPushedSession(username, audience, waitMillis, currentToken());
     }
 
     /** How often the local field is looked at. Nothing leaves the machine, so this is not a request rate. */
